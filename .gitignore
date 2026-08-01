@@ -1,0 +1,42 @@
+# ============================================================
+# RouteWeave — Git Ignore
+# ============================================================
+
+# Environment secrets — NEVER commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Test / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+pgdata/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Node (if any)
+node_modules/
