@@ -1,0 +1,21 @@
+# RouteWeave Alembic (async SQLAlchemy)
+
+Generic single-database configuration with asyncpg driver.
+
+## Usage
+
+```bash
+cd api
+
+# Auto-generate a migration from current models
+alembic revision --autogenerate -m "description"
+
+# Run pending migrations
+alembic upgrade head
+
+# Downgrade one revision
+alembic downgrade -1
+```
+
+Environment variables:
+- `DATABASE_URL` — required. Must use `postgresql+asyncpg://` scheme.

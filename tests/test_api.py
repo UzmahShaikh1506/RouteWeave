@@ -12,6 +12,8 @@ Tests cover:
   - Input validation
   - Job listing
   - OpenAPI docs accessibility
+  - API-key authentication
+  - Background task acceptance (202 response)
 """
 
 import io
@@ -28,6 +30,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'api'))
 # Override DATABASE_URL BEFORE importing the app modules
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_routeweave.db"
 os.environ["OPTIMIZER_URL"] = "http://localhost:9999"
+# Ensure auth is disabled for baseline tests
+os.environ.pop("API_KEY", None)
 
 # Remove stale test DB
 _test_db_path = os.path.join(os.getcwd(), "test_routeweave.db")
@@ -82,6 +86,53 @@ class TestHealthEndpoint:
         assert data["status"] == "healthy"
         assert data["service"] == "api"
         assert data["database"] == "connected"
+
+
+# ─────────────────────────────────────────────────────────────
+# Authentication
+# ─────────────────────────────────────────────────────────────
+
+class TestAuthentication:
+    """Tests for API-key authentication on mutation endpoints."""
+
+    def test_post_jobs_without_api_key_when_configured_returns_401(self, client, monkeypatch):
+        """When API_KEY is set, missing X-API-Key header should return 401."""
+        monkeypatch.setattr("main.API_KEY", "secret-test-key")
+
+        csv_content = 'address\n"Test St, NYC"\n'
+        csv_file = io.BytesIO(csv_content.encode('utf-8'))
+        resp = client.post(
+            "/jobs",
+            files={"file": ("test.csv", csv_file, "text/csv")},
+        )
+        assert resp.status_code == 401
+        assert "api key" in resp.json()["detail"].lower()
+
+    def test_post_jobs_with_wrong_api_key_returns_401(self, client, monkeypatch):
+        """When API_KEY is set, an invalid X-API-Key header should return 401."""
+        monkeypatch.setattr("main.API_KEY", "secret-test-key")
+
+        csv_content = 'address\n"Test St, NYC"\n'
+        csv_file = io.BytesIO(csv_content.encode('utf-8'))
+        resp = client.post(
+            "/jobs",
+            files={"file": ("test.csv", csv_file, "text/csv")},
+            headers={"X-API-Key": "wrong-key"},
+        )
+        assert resp.status_code == 401
+
+    def test_post_jobs_with_correct_api_key_returns_202(self, client, monkeypatch):
+        """When API_KEY is set, a valid X-API-Key header should succeed."""
+        monkeypatch.setattr("main.API_KEY", "secret-test-key")
+
+        csv_content = 'address\n"Test St, NYC"\n'
+        csv_file = io.BytesIO(csv_content.encode('utf-8'))
+        resp = client.post(
+            "/jobs",
+            files={"file": ("test.csv", csv_file, "text/csv")},
+            headers={"X-API-Key": "secret-test-key"},
+        )
+        assert resp.status_code == 202
 
 
 # ─────────────────────────────────────────────────────────────
@@ -177,11 +228,8 @@ class TestAPIEndpoints:
         response = client.get("/jobs?limit=5&offset=0")
         assert response.status_code == 200
 
-    def test_get_route_for_incomplete_job_returns_400(self, client):
-        """Attempting to get route for a non-completed job should fail."""
-        # Create a job manually by posting a valid CSV
-        # (it will fail at geocoding because the optimizer isn't running,
-        #  which is expected — we just want to test the status check)
+    def test_create_job_returns_202_and_pending_status(self, client):
+        """POST /jobs should accept the job and return 202 with pending status."""
         csv = "address\n\"Test Address 123, New York, NY\"\n"
         csv_file = io.BytesIO(csv.encode('utf-8'))
         resp = client.post(
@@ -189,13 +237,44 @@ class TestAPIEndpoints:
             files={"file": ("test.csv", csv_file, "text/csv")},
             data={"depot_address": "Times Square, New York, NY"},
         )
-        # The job will be created but may fail (no geocoder/optimizer in test)
-        # Either way, we can check the status endpoint works
-        if resp.status_code == 201:
-            job_id = resp.json().get("job_id")
-            if job_id:
-                status_resp = client.get(f"/jobs/{job_id}")
-                assert status_resp.status_code == 200
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "pending"
+        assert "job_id" in data
+        assert "message" in data
+
+        # Background tasks run synchronously in TestClient, so by now the job
+        # has likely failed (no real geocoder/optimizer in tests). We just
+        # verify the status endpoint is reachable.
+        job_id = data["job_id"]
+        status_resp = client.get(f"/jobs/{job_id}")
+        assert status_resp.status_code == 200
+        status_data = status_resp.json()
+        assert status_data["id"] == job_id
+        assert status_data["status"] in ("pending", "geocoding", "optimizing", "completed", "failed")
+
+    def test_get_route_for_incomplete_job_returns_400(self, client):
+        """Attempting to get route for a non-completed job should fail."""
+        # Clear rate limiter to avoid 429 from prior tests
+        from main import _rate_limit_store
+        _rate_limit_store.clear()
+
+        # Create a job; background task will likely fail in tests.
+        csv = "address\n\"Test Address 123, New York, NY\"\n"
+        csv_file = io.BytesIO(csv.encode('utf-8'))
+        resp = client.post(
+            "/jobs",
+            files={"file": ("test.csv", csv_file, "text/csv")},
+            data={"depot_address": "Times Square, New York, NY"},
+        )
+        assert resp.status_code == 202
+        job_id = resp.json().get("job_id")
+
+        if job_id:
+            # By now the background task has run and likely failed;
+            # either way status != "completed", so /route should return 400
+            route_resp = client.get(f"/jobs/{job_id}/route")
+            assert route_resp.status_code == 400
 
 
 # ─────────────────────────────────────────────────────────────
@@ -271,8 +350,8 @@ class TestCSVParsing:
             "/jobs",
             files={"file": ("bom.csv", csv_file, "text/csv")},
         )
-        # Should accept the CSV (may fail at geocoding, but CSV parsing should work)
-        assert response.status_code in (201, 500)  # 201 OK or 500 if geocoder unreachable
+        # Should accept the CSV (validation happens before background task)
+        assert response.status_code == 202
 
     def test_csv_with_extra_whitespace(self, client):
         """CSV with whitespace in column names should still work."""
@@ -283,5 +362,4 @@ class TestCSVParsing:
             "/jobs",
             files={"file": ("spaces.csv", csv_file, "text/csv")},
         )
-        assert response.status_code in (201, 500)
-
+        assert response.status_code == 202

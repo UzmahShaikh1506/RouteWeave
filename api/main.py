@@ -9,11 +9,13 @@ Security features:
   - Input validation via Pydantic models
   - CORS restricted to known origins
   - Parameterized SQL queries (SQLAlchemy ORM)
+  - Optional API-key authentication on mutation endpoints
 """
 
 import csv
 import io
 import logging
+import os
 import time
 import uuid
 from collections import defaultdict
@@ -21,13 +23,16 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import (
+    BackgroundTasks,
     Depends,
     FastAPI,
     File,
     Form,
+    Header,
     HTTPException,
     Request,
     UploadFile,
+    status,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, func
@@ -57,6 +62,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("routeweave.api")
 
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+OPTIMIZER_URL = os.getenv("OPTIMIZER_URL", "http://optimizer:8001")
+API_KEY = os.getenv("API_KEY")
 
 # ---------------------------------------------------------------------------
 # Rate Limiter (in-memory, per-IP)
@@ -89,13 +101,30 @@ def _check_rate_limit(client_ip: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Optimizer service client
+# Authentication
 # ---------------------------------------------------------------------------
 
-import os
+async def require_api_key(x_api_key: str = Header(None)) -> None:
+    """
+    Enforce API-key authentication when API_KEY is configured.
 
-OPTIMIZER_URL = os.getenv("OPTIMIZER_URL", "http://optimizer:8001")
+    In development, omit API_KEY from the environment to disable auth.
+    In production, set API_KEY and require clients to pass it via
+    the X-API-Key header.
+    """
+    if not API_KEY:
+        return  # auth disabled in dev
 
+    if x_api_key != API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Optimizer service client
+# ---------------------------------------------------------------------------
 
 async def _call_optimizer(depot: dict, stops: list[dict]) -> dict:
     """Call the optimizer microservice to compute the optimized route."""
@@ -110,6 +139,139 @@ async def _call_optimizer(depot: dict, stops: list[dict]) -> dict:
         )
         response.raise_for_status()
         return response.json()
+
+
+# ---------------------------------------------------------------------------
+# Background Job Processor
+# ---------------------------------------------------------------------------
+
+from database import async_session  # noqa: E402
+
+
+async def _process_job(job_id: uuid.UUID) -> None:
+    """
+    Background worker: geocode addresses and run route optimization.
+
+    This function receives a job_id, creates its own database session,
+    and transitions the job through: pending → geocoding → optimizing → completed | failed.
+    """
+    async with async_session() as session:
+        try:
+            # Fetch job
+            result = await session.execute(select(Job).where(Job.id == job_id))
+            job = result.scalar_one_or_none()
+            if job is None:
+                logger.error("Background worker: job %s not found", job_id)
+                return
+
+            # Update status to geocoding
+            job.status = "geocoding"
+            await session.commit()
+
+            # Fetch stops
+            result = await session.execute(select(Stop).where(Stop.job_id == job.id))
+            stops = result.scalars().all()
+
+            # Geocode depot
+            actual_depot_address = job.depot_address or (stops[0].raw_address if stops else "")
+            async with httpx.AsyncClient(timeout=10.0) as http_client:
+                depot_coords = await geocode_address(actual_depot_address, client=http_client)
+                if depot_coords is None:
+                    job.status = "failed"
+                    job.error_message = f"Could not geocode depot address: {actual_depot_address}"
+                    await session.commit()
+                    logger.error("Job %s failed: depot geocoding error", job_id)
+                    return
+
+                job.depot_lat = depot_coords[0]
+                job.depot_lng = depot_coords[1]
+                await session.commit()
+
+                # Geocode stops
+                geocoded_stops = []
+                for stop in stops:
+                    coords = await geocode_address(stop.raw_address, client=http_client)
+                    if coords:
+                        stop.lat = coords[0]
+                        stop.lng = coords[1]
+                        geocoded_stops.append(stop)
+                    else:
+                        logger.warning(
+                            "Failed to geocode stop '%s' in job %s",
+                            stop.raw_address, job_id,
+                        )
+
+                await session.commit()
+
+            if len(geocoded_stops) == 0:
+                job.status = "failed"
+                job.error_message = "Could not geocode any delivery addresses."
+                await session.commit()
+                logger.error("Job %s failed: no stops geocoded", job_id)
+                return
+
+            # Update status to optimizing
+            job.status = "optimizing"
+            await session.commit()
+
+            # Call optimizer service
+            depot_dict = {
+                "id": "depot",
+                "address": actual_depot_address,
+                "lat": job.depot_lat,
+                "lng": job.depot_lng,
+            }
+            stops_dicts = [
+                {
+                    "id": str(s.id),
+                    "address": s.raw_address,
+                    "lat": s.lat,
+                    "lng": s.lng,
+                }
+                for s in geocoded_stops
+            ]
+
+            opt_result = await _call_optimizer(depot_dict, stops_dicts)
+
+            # Update stops with visit_order
+            for opt_stop in opt_result.get("ordered_stops", []):
+                for db_stop in geocoded_stops:
+                    if str(db_stop.id) == opt_stop["id"]:
+                        db_stop.visit_order = opt_stop["visit_order"]
+                        break
+
+            # Create route summary
+            route = Route(
+                id=uuid.uuid4(),
+                job_id=job.id,
+                naive_distance_km=opt_result["naive_distance_km"],
+                optimized_distance_km=opt_result["optimized_distance_km"],
+                pct_improvement=opt_result["pct_improvement"],
+            )
+            session.add(route)
+
+            job.status = "completed"
+            await session.commit()
+
+            logger.info(
+                "Job %s completed: %.2f km → %.2f km (%.1f%% improvement)",
+                job_id,
+                opt_result["naive_distance_km"],
+                opt_result["optimized_distance_km"],
+                opt_result["pct_improvement"],
+            )
+
+        except Exception as e:
+            logger.error("Job %s failed: %s", job_id, str(e), exc_info=True)
+            try:
+                result = await session.execute(select(Job).where(Job.id == job_id))
+                job = result.scalar_one_or_none()
+                if job:
+                    job.status = "failed"
+                    job.error_message = str(e)
+                    await session.commit()
+            except Exception as inner:
+                logger.error("Failed to mark job %s as failed: %s", job_id, inner)
 
 
 # ---------------------------------------------------------------------------
@@ -133,13 +295,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="RouteWeave API",
     description="Last-mile delivery route optimizer — upload addresses, get optimized routes.",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
 )
 
 # CORS — allow the client (Nginx on port 3000) and local dev
+# NOTE: "*" is NOT used when allow_credentials=True (browser security restriction)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -147,7 +310,6 @@ app.add_middleware(
         "http://localhost:8080",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:8080",
-        "*",  # For development; restrict in production
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -185,9 +347,15 @@ async def health(session: AsyncSession = Depends(get_session)):
     )
 
 
-@app.post("/jobs", tags=["jobs"], status_code=201)
+@app.post(
+    "/jobs",
+    tags=["jobs"],
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_api_key)],
+)
 async def create_job(
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     depot_address: str = Form(""),
     session: AsyncSession = Depends(get_session),
@@ -199,8 +367,12 @@ async def create_job(
     Optionally provide a depot_address (the starting location).
     If no depot is provided, the first address in the CSV is used.
 
+    The job is accepted immediately and processed asynchronously in the
+    background. Poll `GET /jobs/{job_id}` to track status.
+
     Rate-limited to 5 requests per minute per IP.
     Maximum 50 stops per job.
+    Requires X-API-Key header when API_KEY is configured.
     """
     # --- Rate limiting ---
     client_ip = request.client.host if request.client else "unknown"
@@ -287,119 +459,14 @@ async def create_job(
     job_id = str(job.id)
     logger.info("Created job %s with %d stops", job_id, len(addresses))
 
-    # --- Process job (geocode + optimize) ---
-    # In a production system this would be an async task queue.
-    # For this project, we process inline for simplicity.
-    try:
-        # Update status to geocoding
-        job.status = "geocoding"
-        await session.commit()
+    # --- Offload processing to background worker ---
+    background_tasks.add_task(_process_job, job.id)
 
-        # Geocode depot
-        actual_depot_address = depot_address if depot_address else addresses[0]
-        async with httpx.AsyncClient(timeout=10.0) as http_client:
-            from geocode import geocode_address as _geocode
-
-            depot_coords = await _geocode(actual_depot_address, client=http_client)
-            if depot_coords is None:
-                job.status = "failed"
-                job.error_message = f"Could not geocode depot address: {actual_depot_address}"
-                await session.commit()
-                return {"job_id": job_id, "status": "failed", "error": job.error_message}
-
-            job.depot_lat = depot_coords[0]
-            job.depot_lng = depot_coords[1]
-            await session.commit()
-
-            # Geocode all stops
-            result = await session.execute(
-                select(Stop).where(Stop.job_id == job.id)
-            )
-            stops = result.scalars().all()
-
-            geocoded_stops = []
-            for stop in stops:
-                coords = await _geocode(stop.raw_address, client=http_client)
-                if coords:
-                    stop.lat = coords[0]
-                    stop.lng = coords[1]
-                    geocoded_stops.append(stop)
-                else:
-                    logger.warning(
-                        "Failed to geocode stop '%s' in job %s",
-                        stop.raw_address, job_id,
-                    )
-
-            await session.commit()
-
-        if len(geocoded_stops) == 0:
-            job.status = "failed"
-            job.error_message = "Could not geocode any delivery addresses."
-            await session.commit()
-            return {"job_id": job_id, "status": "failed", "error": job.error_message}
-
-        # Update status to optimizing
-        job.status = "optimizing"
-        await session.commit()
-
-        # Call optimizer service
-        depot_dict = {
-            "id": "depot",
-            "address": actual_depot_address,
-            "lat": depot_coords[0],
-            "lng": depot_coords[1],
-        }
-        stops_dicts = [
-            {
-                "id": str(s.id),
-                "address": s.raw_address,
-                "lat": s.lat,
-                "lng": s.lng,
-            }
-            for s in geocoded_stops
-        ]
-
-        opt_result = await _call_optimizer(depot_dict, stops_dicts)
-
-        # Update stops with visit_order
-        for opt_stop in opt_result.get("ordered_stops", []):
-            for db_stop in geocoded_stops:
-                if str(db_stop.id) == opt_stop["id"]:
-                    db_stop.visit_order = opt_stop["visit_order"]
-                    break
-
-        # Create route summary
-        route = Route(
-            id=uuid.uuid4(),
-            job_id=job.id,
-            naive_distance_km=opt_result["naive_distance_km"],
-            optimized_distance_km=opt_result["optimized_distance_km"],
-            pct_improvement=opt_result["pct_improvement"],
-        )
-        session.add(route)
-
-        job.status = "completed"
-        await session.commit()
-
-        logger.info(
-            "Job %s completed: %.2f km → %.2f km (%.1f%% improvement)",
-            job_id,
-            opt_result["naive_distance_km"],
-            opt_result["optimized_distance_km"],
-            opt_result["pct_improvement"],
-        )
-
-        return {
-            "job_id": job_id,
-            "status": "completed",
-        }
-
-    except Exception as e:
-        logger.error("Job %s failed: %s", job_id, str(e), exc_info=True)
-        job.status = "failed"
-        job.error_message = str(e)
-        await session.commit()
-        return {"job_id": job_id, "status": "failed", "error": str(e)}
+    return {
+        "job_id": job_id,
+        "status": "pending",
+        "message": "Job accepted. Poll GET /jobs/{job_id} for status updates.",
+    }
 
 
 @app.get("/jobs", response_model=JobListResponse, tags=["jobs"])

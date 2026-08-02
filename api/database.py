@@ -61,11 +61,35 @@ async_session = async_sessionmaker(
 
 async def init_db():
     """
-    Create all tables defined in the ORM models.
-    Called once on application startup.
+    Initialize the database.
+
+    For SQLite (testing/development), creates all tables via create_all().
+    For PostgreSQL (production), prefers Alembic migrations, but falls back
+    to create_all() if no tables exist yet (first-run local dev convenience).
     """
+    if _is_sqlite:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        return
+
+    # PostgreSQL: check if the jobs table exists before auto-creating
+    from sqlalchemy import inspect as sa_inspect
+
+    def _tables_exist(connection):
+        inspector = sa_inspect(connection)
+        return inspector.has_table("jobs")
+
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        tables_exist = await conn.run_sync(_tables_exist)
+        if not tables_exist:
+            # Fallback for first-run local development without Alembic
+            import logging
+            logger = logging.getLogger("routeweave.db")
+            logger.warning(
+                "No tables found — falling back to create_all(). "
+                "For production, run 'alembic upgrade head' instead."
+            )
+            await conn.run_sync(Base.metadata.create_all)
 
 
 async def get_session() -> AsyncSession:

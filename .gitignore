@@ -22,6 +22,8 @@ build/
 .coverage
 htmlcov/
 .tox/
+*.db
+*.db-journal
 
 # IDE
 .vscode/
