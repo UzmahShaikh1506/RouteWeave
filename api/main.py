@@ -70,6 +70,21 @@ logger = logging.getLogger("routeweave.api")
 OPTIMIZER_URL = os.getenv("OPTIMIZER_URL", "http://optimizer:8001")
 API_KEY = os.getenv("API_KEY")
 
+# SECURITY: When API_KEY is enabled, you MUST terminate TLS at a reverse proxy
+# (Nginx, Traefik, Cloudflare) so the key is never sent over plaintext HTTP.
+
+# CORS origins — override in production via comma-separated env var
+_cors_raw = os.getenv("CORS_ORIGINS", "")
+if _cors_raw.strip():
+    ALLOWED_ORIGINS = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+else:
+    ALLOWED_ORIGINS = [
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8080",
+    ]
+
 # ---------------------------------------------------------------------------
 # Rate Limiter (in-memory, per-IP)
 # ---------------------------------------------------------------------------
@@ -301,16 +316,10 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS — allow the client (Nginx on port 3000) and local dev
-# NOTE: "*" is NOT used when allow_credentials=True (browser security restriction)
+# CORS — configurable via CORS_ORIGINS env var (comma-separated)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8080",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8080",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -322,6 +331,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 MAX_STOPS = 50  # Maximum number of delivery stops per job
+MAX_CSV_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB (must match Nginx client_max_body_size)
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +396,6 @@ async def create_job(
     if file.content_type and file.content_type not in (
         "text/csv",
         "application/vnd.ms-excel",
-        "application/octet-stream",
     ):
         raise HTTPException(
             status_code=422,
@@ -396,6 +405,11 @@ async def create_job(
     # --- Parse CSV ---
     try:
         content = await file.read()
+        if len(content) > MAX_CSV_SIZE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large ({len(content)} bytes). Maximum is {MAX_CSV_SIZE_BYTES // 1024 // 1024} MB.",
+            )
         text = content.decode("utf-8-sig")  # Handle BOM
         reader = csv.DictReader(io.StringIO(text))
 
