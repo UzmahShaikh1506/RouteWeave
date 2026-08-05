@@ -1,25 +1,26 @@
 /**
  * RouteWeave — Client-side map and interaction logic.
- * 
+ *
  * Handles:
  *   - CSV file upload (drag-and-drop + file picker)
  *   - Job creation via API
- *   - Polling for job completion
- *   - Leaflet map rendering (naive vs optimized routes)
+ *   - Real-time SSE updates for job status (with polling fallback)
+ *   - Leaflet map rendering (naive vs optimized routes + animation)
+ *   - GPX export download
  *   - Job history listing
+ *   - Dark / light theme toggle
  */
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-// API base URL — proxied through Nginx in production, direct in dev
 const API_BASE = window.location.port === '3000'
     ? '/api'
     : 'http://localhost:8000';
 
 const POLL_INTERVAL_MS = 1500;
-const MAX_POLL_ATTEMPTS = 120; // 3 minutes max
+const MAX_POLL_ATTEMPTS = 120;
 
 // ---------------------------------------------------------------------------
 // State
@@ -31,7 +32,10 @@ let routeLayers = {
     naive: null,
     optimized: null,
     markers: [],
+    animationMarker: null,
 };
+let currentJobId = null;
+let sseConnection = null;
 
 // ---------------------------------------------------------------------------
 // DOM References
@@ -52,12 +56,55 @@ const stopList = document.getElementById('stop-list');
 const historyList = document.getElementById('history-list');
 const mapEmpty = document.getElementById('map-empty');
 const refreshHistoryBtn = document.getElementById('refresh-history-btn');
+const themeToggle = document.getElementById('theme-toggle');
 
 // Stat elements
 const statNaive = document.getElementById('stat-naive');
 const statOptimized = document.getElementById('stat-optimized');
 const statImprovement = document.getElementById('stat-improvement');
 const statStops = document.getElementById('stat-stops');
+
+// ---------------------------------------------------------------------------
+// Theme Toggle
+// ---------------------------------------------------------------------------
+
+function initTheme() {
+    const saved = localStorage.getItem('routeweave_theme');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const theme = saved || (prefersDark ? 'dark' : 'light');
+    setTheme(theme);
+}
+
+function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('routeweave_theme', theme);
+    themeToggle.textContent = theme === 'dark' ? '🌙' : '☀️';
+    themeToggle.title = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+
+    // Update Leaflet tiles if map exists
+    if (map) {
+        map.eachLayer(layer => {
+            if (layer instanceof L.TileLayer) {
+                map.removeLayer(layer);
+            }
+        });
+        const tileUrl = theme === 'dark'
+            ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+            : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+        L.tileLayer(tileUrl, {
+            attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+            subdomains: 'abcd',
+            maxZoom: 19,
+        }).addTo(map);
+    }
+}
+
+themeToggle.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    setTheme(current === 'dark' ? 'light' : 'dark');
+});
+
+initTheme();
 
 // ---------------------------------------------------------------------------
 // File Upload Handling
@@ -121,7 +168,6 @@ function handleFile(file) {
 optimizeBtn.addEventListener('click', async () => {
     if (!selectedFile) return;
 
-    // Disable button during processing
     optimizeBtn.disabled = true;
     btnText.textContent = '⏳ Processing...';
     showStatus('Uploading CSV and starting optimization...', 'processing');
@@ -142,6 +188,12 @@ optimizeBtn.addEventListener('click', async () => {
             return;
         }
 
+        if (response.status === 401) {
+            showStatus('API key required. Set X-API-Key header.', 'error');
+            resetButton();
+            return;
+        }
+
         if (!response.ok) {
             const err = await response.json();
             showStatus(`Error: ${err.detail || 'Upload failed'}`, 'error');
@@ -151,6 +203,7 @@ optimizeBtn.addEventListener('click', async () => {
 
         const data = await response.json();
         const jobId = data.job_id;
+        currentJobId = jobId;
 
         if (data.status === 'completed') {
             showStatus('Route optimized successfully!', 'success');
@@ -162,9 +215,12 @@ optimizeBtn.addEventListener('click', async () => {
             refreshHistory();
             resetButton();
         } else {
-            // Poll for completion
-            showStatus('Geocoding addresses...', 'processing');
-            await pollJob(jobId);
+            // Try SSE first, fall back to polling
+            const sseOk = connectSSE(jobId);
+            if (!sseOk) {
+                showStatus('Using polling fallback for status updates...', 'processing');
+                await pollJob(jobId);
+            }
         }
 
     } catch (err) {
@@ -173,6 +229,67 @@ optimizeBtn.addEventListener('click', async () => {
         resetButton();
     }
 });
+
+// ---------------------------------------------------------------------------
+// SSE Real-Time Updates
+// ---------------------------------------------------------------------------
+
+function connectSSE(jobId) {
+    try {
+        const evtSource = new EventSource(`${API_BASE}/jobs/${jobId}/events`);
+        sseConnection = evtSource;
+
+        evtSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            handleJobStatus(data.status, jobId, data.error_message);
+        };
+
+        evtSource.onerror = () => {
+            evtSource.close();
+            // Silently fall back — polling will take over if needed
+        };
+
+        return true;
+    } catch (e) {
+        console.warn('SSE not supported, falling back to polling');
+        return false;
+    }
+}
+
+function disconnectSSE() {
+    if (sseConnection) {
+        sseConnection.close();
+        sseConnection = null;
+    }
+}
+
+function handleJobStatus(status, jobId, errorMessage) {
+    switch (status) {
+        case 'geocoding':
+            showStatus('Geocoding delivery addresses...', 'processing');
+            break;
+        case 'optimizing':
+            showStatus('Running route optimization...', 'processing');
+            break;
+        case 'completed':
+            disconnectSSE();
+            showStatus('Route optimized successfully!', 'success');
+            loadRoute(jobId);
+            refreshHistory();
+            resetButton();
+            break;
+        case 'failed':
+            disconnectSSE();
+            showStatus(`Failed: ${errorMessage || 'Unknown error'}`, 'error');
+            refreshHistory();
+            resetButton();
+            break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Polling Fallback
+// ---------------------------------------------------------------------------
 
 async function pollJob(jobId) {
     let attempts = 0;
@@ -183,7 +300,6 @@ async function pollJob(jobId) {
             resetButton();
             return;
         }
-
         attempts++;
 
         try {
@@ -193,36 +309,11 @@ async function pollJob(jobId) {
                 resetButton();
                 return;
             }
-
             const job = await response.json();
+            handleJobStatus(job.status, jobId, job.error_message);
 
-            switch (job.status) {
-                case 'geocoding':
-                    showStatus('Geocoding delivery addresses...', 'processing');
-                    setTimeout(poll, POLL_INTERVAL_MS);
-                    break;
-
-                case 'optimizing':
-                    showStatus('Running route optimization...', 'processing');
-                    setTimeout(poll, POLL_INTERVAL_MS);
-                    break;
-
-                case 'completed':
-                    showStatus('Route optimized successfully!', 'success');
-                    await loadRoute(jobId);
-                    refreshHistory();
-                    resetButton();
-                    break;
-
-                case 'failed':
-                    showStatus(`Failed: ${job.error_message || 'Unknown error'}`, 'error');
-                    refreshHistory();
-                    resetButton();
-                    break;
-
-                default:
-                    showStatus(`Status: ${job.status}`, 'processing');
-                    setTimeout(poll, POLL_INTERVAL_MS);
+            if (job.status !== 'completed' && job.status !== 'failed') {
+                setTimeout(poll, POLL_INTERVAL_MS);
             }
         } catch (err) {
             console.error('Poll error:', err);
@@ -247,6 +338,7 @@ async function loadRoute(jobId) {
         }
 
         const data = await response.json();
+        currentJobId = jobId;
         showResults(data);
         drawRoute(data);
 
@@ -257,23 +349,28 @@ async function loadRoute(jobId) {
 }
 
 function showResults(data) {
-    // Update stats
     statNaive.textContent = data.naive_distance_km.toFixed(1);
     statOptimized.textContent = data.optimized_distance_km.toFixed(1);
     statImprovement.textContent = `${data.pct_improvement.toFixed(1)}%`;
     statStops.textContent = data.stops.length;
 
-    // Show cards with animation
     resultsCard.style.display = 'block';
     resultsCard.style.animation = 'fadeIn 0.4s ease forwards';
 
-    // Build stop list
     stopsCard.style.display = 'block';
     stopsCard.style.animation = 'fadeIn 0.4s ease 0.1s forwards';
 
     stopList.innerHTML = '';
 
-    // Add depot first
+    // Add GPX download button to results card
+    const gpxBtn = document.createElement('button');
+    gpxBtn.className = 'btn btn-secondary';
+    gpxBtn.style.cssText = 'margin-top: var(--space-md); width: 100%;';
+    gpxBtn.innerHTML = '📥 Download GPX';
+    gpxBtn.onclick = () => downloadGPX(data.job_id);
+    stopList.appendChild(gpxBtn);
+
+    // Add depot
     if (data.depot) {
         const depotEl = document.createElement('div');
         depotEl.className = 'stop-item';
@@ -302,23 +399,36 @@ function showResults(data) {
     });
 }
 
+function downloadGPX(jobId) {
+    const url = `${API_BASE}/jobs/${jobId}/route.gpx`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `routeweave_${jobId}.gpx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
 // ---------------------------------------------------------------------------
 // Map Rendering
 // ---------------------------------------------------------------------------
 
 function initMap() {
-    if (map) return; // Already initialized
+    if (map) return;
 
-    // Hide empty state
     if (mapEmpty) mapEmpty.style.display = 'none';
 
     map = L.map('map', {
         zoomControl: true,
         attributionControl: true,
-    }).setView([40.7128, -74.0060], 12); // Default: NYC
+    }).setView([40.7128, -74.0060], 12);
 
-    // Dark-themed tile layer
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+    const tileUrl = theme === 'dark'
+        ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+        : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+
+    L.tileLayer(tileUrl, {
         attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
         subdomains: 'abcd',
         maxZoom: 19,
@@ -336,6 +446,10 @@ function clearRoutes() {
     }
     routeLayers.markers.forEach(m => map.removeLayer(m));
     routeLayers.markers = [];
+    if (routeLayers.animationMarker) {
+        map.removeLayer(routeLayers.animationMarker);
+        routeLayers.animationMarker = null;
+    }
 }
 
 function drawRoute(data) {
@@ -347,21 +461,31 @@ function drawRoute(data) {
 
     if (!depot || stops.length === 0) return;
 
-    // Build coordinate arrays
     const allCoords = [];
 
-    // --- Naive route (original input order, by visit_order? No, original order is just the stops as uploaded)
-    // Since we don't have the original order stored, we'll draw a "naive" route 
-    // as the stops sorted by their original position (we can use the response order minus sorting)
-    // Actually, the naive route is depot → stops in the order they appear in the CSV (not optimized).
-    // The API returns stops sorted by visit_order (optimized), so let's just show:
-    // - Optimized route (green, solid)
-    // We don't have the original CSV order from the route endpoint, but we can still draw the optimized route.
-    
-    // For a "before" visualization, we could sort stops by name or use a random-ish order,
-    // but the most honest approach: draw the optimized route prominently.
+    // Draw naive route (dashed, red)
+    const naiveCoords = [];
+    if (depot.lat && depot.lng) {
+        naiveCoords.push([depot.lat, depot.lng]);
+    }
+    const naiveStops = [...stops].sort((a, b) => a.address.localeCompare(b.address));
+    naiveStops.forEach(stop => {
+        if (stop.lat && stop.lng) {
+            naiveCoords.push([stop.lat, stop.lng]);
+        }
+    });
 
-    // Draw optimized route
+    if (naiveCoords.length > 1) {
+        routeLayers.naive = L.polyline(naiveCoords, {
+            color: '#ef4444',
+            weight: 2.5,
+            opacity: 0.4,
+            dashArray: '8, 8',
+            lineJoin: 'round',
+        }).addTo(map);
+    }
+
+    // Draw optimized route (solid, green)
     const optimizedCoords = [];
     if (depot.lat && depot.lng) {
         optimizedCoords.push([depot.lat, depot.lng]);
@@ -376,31 +500,6 @@ function drawRoute(data) {
         }
     });
 
-    // Draw naive route (just connect stops in a different order — reverse of optimized as a visual contrast)
-    const naiveCoords = [];
-    if (depot.lat && depot.lng) {
-        naiveCoords.push([depot.lat, depot.lng]);
-    }
-    // Use alphabetical order of addresses as the "naive" order for visual contrast
-    const naiveStops = [...stops].sort((a, b) => a.address.localeCompare(b.address));
-    naiveStops.forEach(stop => {
-        if (stop.lat && stop.lng) {
-            naiveCoords.push([stop.lat, stop.lng]);
-        }
-    });
-
-    // Draw naive polyline (dashed, red)
-    if (naiveCoords.length > 1) {
-        routeLayers.naive = L.polyline(naiveCoords, {
-            color: '#ef4444',
-            weight: 2.5,
-            opacity: 0.4,
-            dashArray: '8, 8',
-            lineJoin: 'round',
-        }).addTo(map);
-    }
-
-    // Draw optimized polyline (solid, green)
     if (optimizedCoords.length > 1) {
         routeLayers.optimized = L.polyline(optimizedCoords, {
             color: '#10b981',
@@ -411,8 +510,7 @@ function drawRoute(data) {
         }).addTo(map);
     }
 
-    // Add markers
-    // Depot marker
+    // Add depot marker
     if (depot.lat && depot.lng) {
         const depotIcon = L.divIcon({
             className: 'custom-marker',
@@ -431,7 +529,7 @@ function drawRoute(data) {
         routeLayers.markers.push(depotMarker);
     }
 
-    // Stop markers
+    // Add stop markers
     sortedStops.forEach(stop => {
         if (!stop.lat || !stop.lng) return;
 
@@ -452,11 +550,70 @@ function drawRoute(data) {
         routeLayers.markers.push(marker);
     });
 
-    // Fit map to route bounds
+    // Fit bounds
     if (allCoords.length > 0) {
         const bounds = L.latLngBounds(allCoords);
         map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
     }
+
+    // Animate route
+    if (optimizedCoords.length > 1) {
+        animateRoute(optimizedCoords);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Route Animation
+// ---------------------------------------------------------------------------
+
+function animateRoute(coords) {
+    if (routeLayers.animationMarker) {
+        map.removeLayer(routeLayers.animationMarker);
+    }
+
+    const vehicleIcon = L.divIcon({
+        className: 'vehicle-marker',
+        html: '<div class="vehicle-pin">🚚</div>',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+    });
+
+    const marker = L.marker(coords[0], { icon: vehicleIcon, zIndexOffset: 1000 }).addTo(map);
+    routeLayers.animationMarker = marker;
+
+    let currentIndex = 0;
+    let progress = 0;
+    const speed = 0.015; // progress per frame
+
+    function step() {
+        if (currentIndex >= coords.length - 1) {
+            // Done — fade out vehicle
+            setTimeout(() => {
+                if (routeLayers.animationMarker) {
+                    map.removeLayer(routeLayers.animationMarker);
+                    routeLayers.animationMarker = null;
+                }
+            }, 1000);
+            return;
+        }
+
+        const start = coords[currentIndex];
+        const end = coords[currentIndex + 1];
+
+        progress += speed;
+        if (progress >= 1) {
+            progress = 0;
+            currentIndex++;
+        }
+
+        const lat = start[0] + (end[0] - start[0]) * progress;
+        const lng = start[1] + (end[1] - start[1]) * progress;
+        marker.setLatLng([lat, lng]);
+
+        requestAnimationFrame(step);
+    }
+
+    requestAnimationFrame(step);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +676,6 @@ function showStatus(message, type = 'processing') {
         statusSpinner.style.display = 'none';
     }
 
-    // Auto-hide success/error after 5 seconds
     if (type === 'success' || type === 'error') {
         setTimeout(() => {
             statusBar.style.display = 'none';

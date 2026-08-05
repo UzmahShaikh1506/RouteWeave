@@ -93,6 +93,26 @@ class Route(Base):
     job = relationship("Job", back_populates="route")
 
 
+class GeocodeCache(Base):
+    """
+    Cache for geocoded addresses to reduce Nominatim API calls
+    and improve performance. TTL is handled by the application.
+    """
+    __tablename__ = "geocode_cache"
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    address_hash = Column(String(64), unique=True, nullable=False, index=True)
+    raw_address = Column(String(500), nullable=False)
+    lat = Column(Float, nullable=False)
+    lng = Column(Float, nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    hit_count = Column(Integer, default=1, nullable=False)
+
+
 # ---------------------------------------------------------------------------
 # Pydantic Schemas (API request/response serialization)
 # ---------------------------------------------------------------------------

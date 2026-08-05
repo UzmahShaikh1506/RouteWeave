@@ -363,3 +363,160 @@ class TestCSVParsing:
             files={"file": ("spaces.csv", csv_file, "text/csv")},
         )
         assert response.status_code == 202
+
+    def test_oversized_csv_rejected(self, client):
+        """CSV larger than 5 MB should return 413."""
+        self._clear_rate_limit()
+        # Create a large fake CSV (~6 MB)
+        line = '"A Very Long Address That Takes Up Many Bytes, New York, NY"\n'
+        big_csv = "address\n" + (line * 200_000)
+        csv_file = io.BytesIO(big_csv.encode('utf-8'))
+        response = client.post(
+            "/jobs",
+            files={"file": ("huge.csv", csv_file, "text/csv")},
+        )
+        assert response.status_code == 413
+
+
+# ─────────────────────────────────────────────────────────────
+# SSE
+# ─────────────────────────────────────────────────────────────
+
+class TestSSE:
+    """Tests for Server-Sent Events endpoint."""
+
+    def test_sse_for_existing_job(self, client):
+        """SSE endpoint should return event-stream for a valid job."""
+        # First create a job
+        self._clear_rate_limit()
+        csv = "address\n\"Test Address, New York, NY\"\n"
+        csv_file = io.BytesIO(csv.encode('utf-8'))
+        resp = client.post("/jobs", files={"file": ("test.csv", csv_file, "text/csv")})
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+
+        # SSE endpoint should be reachable and stream
+        sse_resp = client.get(f"/jobs/{job_id}/events")
+        assert sse_resp.status_code == 200
+        assert "text/event-stream" in sse_resp.headers.get("content-type", "")
+
+    def test_sse_for_nonexistent_job_returns_404(self, client):
+        """SSE for a nonexistent job should return 404."""
+        fake_id = str(uuid.uuid4())
+        response = client.get(f"/jobs/{fake_id}/events")
+        assert response.status_code == 404
+
+    def _clear_rate_limit(self):
+        from main import _rate_limit_store
+        _rate_limit_store.clear()
+
+
+# ─────────────────────────────────────────────────────────────
+# Admin
+# ─────────────────────────────────────────────────────────────
+
+class TestAdmin:
+    """Tests for admin endpoints."""
+
+    def test_admin_stats_without_key_returns_403(self, client):
+        """Admin stats without ADMIN_KEY configured should return 403."""
+        resp = client.get("/admin/stats")
+        assert resp.status_code == 403
+
+    def test_admin_stats_with_wrong_key_returns_401(self, client, monkeypatch):
+        """Admin stats with wrong key should return 401."""
+        monkeypatch.setattr("main.ADMIN_KEY", "secret-admin")
+        resp = client.get("/admin/stats", headers={"X-Admin-Key": "wrong"})
+        assert resp.status_code == 401
+
+    def test_admin_stats_with_correct_key_returns_200(self, client, monkeypatch):
+        """Admin stats with correct key should return system metrics."""
+        monkeypatch.setattr("main.ADMIN_KEY", "secret-admin")
+        resp = client.get("/admin/stats", headers={"X-Admin-Key": "secret-admin"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "jobs" in data
+        assert "routes" in data
+        assert "geocoding_cache" in data
+        assert "system" in data
+
+    def test_delete_job_requires_admin_key(self, client, monkeypatch):
+        """Deleting a job requires a valid admin key."""
+        monkeypatch.setattr("main.ADMIN_KEY", "secret-admin")
+        fake_id = str(uuid.uuid4())
+        resp = client.delete(f"/jobs/{fake_id}")
+        # Missing header → 401 (key is configured but not provided)
+        assert resp.status_code == 401
+
+    def test_delete_job_with_admin_key(self, client, monkeypatch):
+        """Admin can delete an existing job."""
+        monkeypatch.setattr("main.ADMIN_KEY", "secret-admin")
+
+        # Create a job first
+        self._clear_rate_limit()
+        csv = "address\n\"Test Address, New York, NY\"\n"
+        csv_file = io.BytesIO(csv.encode('utf-8'))
+        create_resp = client.post("/jobs", files={"file": ("test.csv", csv_file, "text/csv")})
+        assert create_resp.status_code == 202
+        job_id = create_resp.json()["job_id"]
+
+        # Delete it
+        del_resp = client.delete(f"/jobs/{job_id}", headers={"X-Admin-Key": "secret-admin"})
+        assert del_resp.status_code == 204
+
+        # Verify it's gone
+        get_resp = client.get(f"/jobs/{job_id}")
+        assert get_resp.status_code == 404
+
+    def _clear_rate_limit(self):
+        from main import _rate_limit_store
+        _rate_limit_store.clear()
+
+
+# ─────────────────────────────────────────────────────────────
+# Analytics
+# ─────────────────────────────────────────────────────────────
+
+class TestAnalytics:
+    """Tests for public analytics endpoints."""
+
+    def test_analytics_overview_returns_200(self, client):
+        """Public analytics endpoint should return aggregated stats."""
+        resp = client.get("/analytics/overview")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "total_jobs" in data
+        assert "completed_jobs" in data
+        assert "success_rate_pct" in data
+        assert "avg_improvement_pct" in data
+
+
+# ─────────────────────────────────────────────────────────────
+# GPX Export
+# ─────────────────────────────────────────────────────────────
+
+class TestGPXExport:
+    """Tests for GPX route export."""
+
+    def test_gpx_for_non_completed_job_returns_400(self, client):
+        """GPX export for a non-completed job should return 400."""
+        # Create a job (will likely fail in tests)
+        self._clear_rate_limit()
+        csv = "address\n\"Test Address, New York, NY\"\n"
+        csv_file = io.BytesIO(csv.encode('utf-8'))
+        resp = client.post("/jobs", files={"file": ("test.csv", csv_file, "text/csv")})
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+
+        gpx_resp = client.get(f"/jobs/{job_id}/route.gpx")
+        assert gpx_resp.status_code == 400
+
+    def test_gpx_for_nonexistent_job_returns_404(self, client):
+        """GPX export for nonexistent job should return 404."""
+        fake_id = str(uuid.uuid4())
+        resp = client.get(f"/jobs/{fake_id}/route.gpx")
+        assert resp.status_code == 404
+
+    def _clear_rate_limit(self):
+        from main import _rate_limit_store
+        _rate_limit_store.clear()

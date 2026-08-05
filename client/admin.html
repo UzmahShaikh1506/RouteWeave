@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RouteWeave — Admin Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+
+<div class="app-container">
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">🔐</div>
+            <div>
+                <div class="logo-text">RouteWeave</div>
+                <div class="logo-subtitle">Admin Dashboard</div>
+            </div>
+        </div>
+        <a href="/" class="btn btn-secondary">← Back to App</a>
+    </header>
+
+    <!-- Login Screen -->
+    <section id="login-screen" class="login-screen">
+        <div class="login-card">
+            <div class="login-icon">🔐</div>
+            <h2>Admin Access</h2>
+            <p>Enter your admin key to view system statistics and manage jobs.</p>
+            <input type="password" id="admin-key-input" class="form-input" placeholder="Admin Key" />
+            <button class="btn btn-primary" id="login-btn">Sign In</button>
+            <div id="login-error" class="login-error"></div>
+        </div>
+    </section>
+
+    <!-- Dashboard -->
+    <main id="dashboard" class="dashboard" style="display: none;">
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Jobs</div>
+                <div class="stat-value" id="stat-total-jobs">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Completed</div>
+                <div class="stat-value success" id="stat-completed">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Success Rate</div>
+                <div class="stat-value" id="stat-success-rate">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Improvement</div>
+                <div class="stat-value accent" id="stat-avg-improvement">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Distance Saved (km)</div>
+                <div class="stat-value accent" id="stat-saved">—</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Cache Entries</div>
+                <div class="stat-value" id="stat-cache">—</div>
+            </div>
+        </div>
+
+        <!-- System Health -->
+        <div class="card">
+            <div class="card-title">🩺 System Health</div>
+            <div class="health-grid" id="health-grid">
+                <div class="health-item loading">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Job Filters -->
+        <div class="card">
+            <div class="card-title" style="justify-content: space-between;">
+                <span>📋 Jobs</span>
+                <div class="filter-bar">
+                    <select id="status-filter" class="form-select">
+                        <option value="">All Statuses</option>
+                        <option value="pending">Pending</option>
+                        <option value="geocoding">Geocoding</option>
+                        <option value="optimizing">Optimizing</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                    <button class="btn btn-secondary" id="refresh-jobs-btn">Refresh</button>
+                </div>
+            </div>
+            <div class="table-wrapper">
+                <table class="data-table" id="jobs-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Depot</th>
+                            <th>Stops</th>
+                            <th>Route</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="jobs-tbody">
+                        <tr><td colspan="7" class="empty-cell">No jobs found.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script src="admin.js"></script>
+</body>
+</html>

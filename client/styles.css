@@ -58,6 +58,26 @@
     --transition-slow: 400ms ease;
 }
 
+/* --------------- Light Theme Override --------------- */
+[data-theme="light"] {
+    --bg-primary: #f8fafc;
+    --bg-secondary: #ffffff;
+    --bg-card: rgba(255, 255, 255, 0.85);
+    --bg-card-hover: rgba(255, 255, 255, 0.95);
+    --bg-glass: rgba(0, 0, 0, 0.02);
+    --border-glass: rgba(0, 0, 0, 0.08);
+    --border-glass-hover: rgba(0, 0, 0, 0.15);
+
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #94a3b8;
+
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.1);
+    --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.12);
+    --shadow-glow: 0 0 30px rgba(13, 148, 136, 0.1);
+}
+
 /* --------------- Reset & Base --------------- */
 *,
 *::before,
@@ -205,6 +225,48 @@ h3 { font-size: 1.125rem; }
     border-radius: 50%;
     background: var(--success);
     animation: pulse 2s infinite;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.header-link {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-decoration: none;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-glass);
+    transition: all var(--transition-fast);
+}
+.header-link:hover {
+    color: var(--text-primary);
+    background: var(--bg-glass);
+    border-color: var(--border-glass-hover);
+}
+
+.theme-toggle {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid var(--border-glass);
+    background: var(--bg-glass);
+    color: var(--text-secondary);
+    font-size: 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
+}
+.theme-toggle:hover {
+    background: var(--bg-card-hover);
+    color: var(--text-primary);
+    transform: scale(1.05);
 }
 
 /* --------------- Glass Card --------------- */
@@ -819,11 +881,37 @@ h3 { font-size: 1.125rem; }
 }
 
 .leaflet-control-attribution {
-    background: rgba(10, 14, 23, 0.8) !important;
+    background: var(--bg-primary) !important;
+    opacity: 0.8;
     color: var(--text-muted) !important;
     font-size: 0.625rem !important;
 }
 
 .leaflet-control-attribution a {
     color: var(--text-secondary) !important;
+}
+
+/* Vehicle animation marker */
+.vehicle-marker {
+    background: none;
+    border: none;
+}
+
+.vehicle-pin {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--accent-gradient);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    box-shadow: 0 0 12px rgba(6, 182, 212, 0.5), 0 4px 8px rgba(0,0,0,0.3);
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    animation: pulse-vehicle 1.5s infinite;
+}
+
+@keyframes pulse-vehicle {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 12px rgba(6, 182, 212, 0.5); }
+    50% { transform: scale(1.1); box-shadow: 0 0 20px rgba(6, 182, 212, 0.8); }
 }
