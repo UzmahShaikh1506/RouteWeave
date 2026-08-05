@@ -363,12 +363,12 @@ function showResults(data) {
     stopList.innerHTML = '';
 
     // Add GPX download button to results card
-    const gpxBtn = document.createElement('button');
-    gpxBtn.className = 'btn btn-secondary';
-    gpxBtn.style.cssText = 'margin-top: var(--space-md); width: 100%;';
-    gpxBtn.innerHTML = '📥 Download GPX';
-    gpxBtn.onclick = () => downloadGPX(data.job_id);
-    stopList.appendChild(gpxBtn);
+        const gpxBtn = document.createElement('button');
+        gpxBtn.className = 'btn btn-secondary';
+        gpxBtn.style.cssText = 'margin-top: var(--space-md); width: 100%;';
+        gpxBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download GPX`;
+        gpxBtn.onclick = () => downloadGPX(data.job_id);
+        stopList.appendChild(gpxBtn);
 
     // Add depot
     if (data.depot) {
@@ -376,7 +376,9 @@ function showResults(data) {
         depotEl.className = 'stop-item';
         depotEl.style.animationDelay = '0s';
         depotEl.innerHTML = `
-            <div class="stop-number depot">🏠</div>
+            <div class="stop-number depot">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            </div>
             <div class="stop-address" title="${escapeHtml(data.depot.address)}">
                 <strong>Depot:</strong> ${escapeHtml(data.depot.address)}
             </div>
@@ -514,7 +516,7 @@ function drawRoute(data) {
     if (depot.lat && depot.lng) {
         const depotIcon = L.divIcon({
             className: 'custom-marker',
-            html: '<div class="marker-pin depot">🏠</div>',
+            html: `<div class="marker-pin depot"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>`,
             iconSize: [34, 34],
             iconAnchor: [17, 17],
             popupAnchor: [0, -20],
@@ -573,7 +575,7 @@ function animateRoute(coords) {
 
     const vehicleIcon = L.divIcon({
         className: 'vehicle-marker',
-        html: '<div class="vehicle-pin">🚚</div>',
+        html: `<div class="vehicle-pin"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div>`,
         iconSize: [28, 28],
         iconAnchor: [14, 14],
     });

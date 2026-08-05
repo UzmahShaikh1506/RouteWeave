@@ -6,59 +6,51 @@
     <meta name="description" content="RouteWeave — Optimize your last-mile delivery routes. Upload addresses, get optimized routes with before/after distance comparison on an interactive map.">
     <title>RouteWeave — Delivery Route Optimizer</title>
 
-    <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-    <!-- Leaflet.js (Map) -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
-    <!-- App Styles -->
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <div class="app-container">
 
-    <!-- ===== Header ===== -->
     <header class="header" id="app-header">
         <div class="logo">
-            <div class="logo-icon">🧭</div>
+            <div class="logo-icon">RW</div>
             <div>
                 <div class="logo-text">RouteWeave</div>
-                <div class="logo-subtitle">Delivery Route Optimizer</div>
+                <div class="logo-subtitle">Route Optimization</div>
             </div>
         </div>
         <div class="header-actions">
-            <button class="theme-toggle" id="theme-toggle" title="Toggle theme">🌙</button>
+            <button class="theme-toggle" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            </button>
             <a href="/admin" class="header-link">Admin</a>
-            <div class="header-badge">
-                <span class="dot"></span>
-                <span>System Online</span>
-            </div>
         </div>
     </header>
 
-    <!-- ===== Sidebar ===== -->
     <aside class="sidebar">
 
-        <!-- Upload Card -->
         <section class="card" id="upload-card">
             <div class="card-title">
-                <span class="icon">📦</span> New Route
+                New Route
             </div>
 
             <div class="form-group">
-                <label class="form-label" for="depot-address">Depot Address (Start)</label>
+                <label class="form-label" for="depot-address">Starting Location (Depot)</label>
                 <input
                     type="text"
                     id="depot-address"
                     class="form-input"
-                    placeholder="e.g., 123 Bakery Lane, New York, NY"
+                    placeholder="e.g. 123 Main St, New York, NY"
                     autocomplete="street-address"
                 >
             </div>
@@ -71,30 +63,30 @@
                 aria-label="Upload CSV file with delivery addresses"
             >
                 <div id="upload-content">
-                    <div class="upload-icon">📄</div>
+                    <div class="upload-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    </div>
                     <div class="upload-text">Drop your CSV here or click to browse</div>
-                    <div class="upload-hint">Must contain an "address" column · Max 50 stops</div>
+                    <div class="upload-hint">Requires an "address" column. Max 50 stops, 5 MB.</div>
                 </div>
                 <input type="file" id="file-input" accept=".csv" aria-hidden="true">
             </div>
 
             <div style="margin-top: var(--space-lg);">
                 <button class="btn btn-primary" id="optimize-btn" disabled>
-                    <span id="btn-text">🚀 Optimize Route</span>
+                    <span id="btn-text">Optimize Route</span>
                 </button>
             </div>
         </section>
 
-        <!-- Status Bar -->
         <div class="status-bar" id="status-bar" style="display: none;">
             <div class="spinner" id="status-spinner"></div>
             <span id="status-text">Processing...</span>
         </div>
 
-        <!-- Results Card -->
         <section class="card" id="results-card" style="display: none;">
             <div class="card-title">
-                <span class="icon">📊</span> Results
+                Results
             </div>
             <div class="stats-grid">
                 <div class="stat-item">
@@ -105,21 +97,20 @@
                     <div class="stat-value optimized" id="stat-optimized">—</div>
                     <div class="stat-label">After (km)</div>
                 </div>
-                <div class="stat-item stat-full">
+                <div class="stat-item">
                     <div class="stat-value improvement" id="stat-improvement">—</div>
-                    <div class="stat-label">Distance Saved</div>
+                    <div class="stat-label">Saved</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-value stops" id="stat-stops">—</div>
+                    <div class="stat-value" id="stat-stops">—</div>
                     <div class="stat-label">Stops</div>
                 </div>
             </div>
         </section>
 
-        <!-- Stop List Card -->
         <section class="card" id="stops-card" style="display: none;">
             <div class="card-title" style="justify-content: space-between;">
-                <span><span class="icon">📍</span> Optimized Order</span>
+                <span>Optimized Order</span>
             </div>
             <div class="legend">
                 <div class="legend-item">
@@ -134,25 +125,23 @@
             <div class="stop-list" id="stop-list" style="margin-top: var(--space-md);"></div>
         </section>
 
-        <!-- History Card -->
         <section class="card" id="history-card">
             <div class="card-title" style="justify-content: space-between;">
-                <span><span class="icon">🕐</span> Recent Jobs</span>
+                <span>Recent Jobs</span>
                 <button class="btn btn-secondary" id="refresh-history-btn">Refresh</button>
             </div>
             <div id="history-list">
-                <div style="text-align: center; color: var(--text-muted); font-size: 0.813rem; padding: var(--space-md);">
+                <div style="text-align: center; color: var(--text-muted); font-size: 0.8125rem; padding: var(--space-md);">
                     No jobs yet. Upload a CSV to get started.
                 </div>
             </div>
         </section>
     </aside>
 
-    <!-- ===== Map ===== -->
     <main class="map-container" id="map-wrapper">
         <div id="map">
             <div class="empty-state" id="map-empty">
-                <div class="icon">🗺️</div>
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.4;"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
                 <h3>No Route Yet</h3>
                 <p>Upload a CSV with delivery addresses to see the optimized route on the map.</p>
             </div>
@@ -161,7 +150,6 @@
 
 </div>
 
-<!-- App Scripts -->
 <script src="map.js"></script>
 
 </body>

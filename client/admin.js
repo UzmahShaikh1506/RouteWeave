@@ -107,23 +107,23 @@ function renderHealth(data) {
     const statuses = data.jobs.by_status || {};
     const total = data.jobs.total;
 
-    const items = [
-        { label: 'API Service', online: true },
-        { label: 'Database', online: data.system && true },
-        { label: 'Pending Jobs', online: (statuses.pending || 0) < 10, count: statuses.pending || 0 },
-        { label: 'Failed Jobs', online: (statuses.failed || 0) === 0, count: statuses.failed || 0 },
-        { label: 'Cache Hits', online: true, count: data.geocoding_cache.total_hits },
-    ];
+            const items = [
+                { label: 'API Service', online: true },
+                { label: 'Database', online: data.system && true },
+                { label: 'Pending Jobs', online: (statuses.pending || 0) < 10, count: statuses.pending || 0 },
+                { label: 'Failed Jobs', online: (statuses.failed || 0) === 0, count: statuses.failed || 0 },
+                { label: 'Cache Hits', online: true, count: data.geocoding_cache.total_hits },
+            ];
 
-    grid.innerHTML = items.map(item => `
-        <div class="health-item">
-            <div class="health-dot ${item.online ? 'online' : 'offline'}"></div>
-            <div>
-                <div style="font-weight: 600; color: var(--text-primary);">${item.label}</div>
-                ${item.count !== undefined ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${item.count}</div>` : ''}
-            </div>
-        </div>
-    `).join('');
+            grid.innerHTML = items.map(item => `
+                <div class="health-item">
+                    <div class="health-dot ${item.online ? 'online' : 'offline'}"></div>
+                    <div>
+                        <div style="font-weight: 600; color: var(--text-heading);">${item.label}</div>
+                        ${item.count !== undefined ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${item.count}</div>` : ''}
+                    </div>
+                </div>
+            `).join('');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
