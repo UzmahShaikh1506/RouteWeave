@@ -90,6 +90,8 @@ Browser (localhost:3000)
 | **Before/After Stats** | Four stat cards: Before km, After km, Saved %, Stops count. |
 | **Stop List** | Scrollable list showing depot + stops in optimized visit order. |
 | **Route Legend** | Color key: red dashed = original, green solid = optimized. |
+| **Skipped Addresses** | Addresses Nominatim can't resolve are listed under the stop list instead of disappearing silently. |
+| **API Key Prompt** | When the server has `API_KEY` set, the UI prompts once and remembers the key. |
 | **Job History** | Sidebar list of recent jobs with status badges. Click completed job to reload on map. |
 | **GPX Download** | Button in stop list to download `.gpx` after optimization. |
 | **Theme Toggle** | Sun/moon icon in header. Dark/light mode with `localStorage` persistence. |
@@ -101,7 +103,7 @@ Browser (localhost:3000)
 | **Dark & Light Tiles** | CARTO dark_all / light_all basemaps. Auto-switches with theme. |
 | **Depot Marker** | Warm amber gradient circle marker with home icon. |
 | **Stop Markers** | Coral gradient numbered circles in optimized order. |
-| **Route Polylines** | Red dashed = naive route, green solid = optimized route. |
+| **Route Polylines** | Red dashed = naive route (original CSV order), green solid = optimized route. |
 | **Route Animation** | Animated delivery vehicle marker travels the optimized route with pulsing glow. |
 | **Popups** | Click any marker → address info. Styled to match theme. |
 | **Auto-fit Bounds** | Map zooms to show entire route with padding. |
@@ -142,7 +144,7 @@ Browser (localhost:3000)
 | **GitHub Actions CI/CD** | 4-stage pipeline: tests → Trivy security scan → GHCR build/push → deploy hook. |
 | **Trivy Scanning** | Blocks on CRITICAL vulnerabilities in container images. |
 | **Environment Config** | `.env.example` with DB_PASSWORD, API_KEY, ADMIN_KEY, CORS_ORIGINS. |
-| **Test Suite** | 64 tests: API, auth, rate limiting, CSV parsing, SSE, admin, analytics, GPX, optimizer math, integration. |
+| **Test Suite** | 67 tests: API, auth, rate limiting, CSV parsing, SSE, admin, analytics, GPX, optimizer math, integration, full geocode→optimize→route pipeline. Fully offline (geocoder stubbed). |
 | **Pytest** | SQLite backend for fast unit tests. No Docker required for testing. |
 
 ---

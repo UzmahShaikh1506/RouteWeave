@@ -71,6 +71,20 @@ def client():
             pass
 
 
+@pytest.fixture(autouse=True)
+def _no_network_geocoding(monkeypatch):
+    """
+    Background tasks run inside TestClient, so without this every job
+    created in a test would call the live Nominatim API. Replace the
+    geocoder with an offline stub that resolves nothing (jobs fail fast).
+    Tests needing real coordinates override main.geocode_address again.
+    """
+    async def _offline_geocode(address, client=None, db_session=None):
+        return None
+
+    monkeypatch.setattr("main.geocode_address", _offline_geocode)
+
+
 # ─────────────────────────────────────────────────────────────
 # Health
 # ─────────────────────────────────────────────────────────────
@@ -520,3 +534,96 @@ class TestGPXExport:
     def _clear_rate_limit(self):
         from main import _rate_limit_store
         _rate_limit_store.clear()
+
+
+# ─────────────────────────────────────────────────────────────
+# Full pipeline (geocode → optimize → route / GPX)
+# ─────────────────────────────────────────────────────────────
+
+class TestFullPipeline:
+    """End-to-end happy path with stubbed geocoder and in-process optimizer."""
+
+    COORDS = {
+        "times square, new york, ny": (40.7580, -73.9855),
+        "wall street, new york, ny": (40.7074, -74.0113),
+        "central park, new york, ny": (40.7829, -73.9654),
+        "brooklyn bridge, new york, ny": (40.7061, -73.9969),
+        "grand central terminal, new york, ny": (40.7527, -73.9772),
+    }
+
+    def _run_job(self, client, monkeypatch, csv_text, depot):
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "optimizer"))
+        from optimize import optimize_route
+        from main import _rate_limit_store
+        _rate_limit_store.clear()
+
+        async def fake_geocode(address, client=None, db_session=None):
+            return self.COORDS.get(address.strip().lower())
+
+        async def fake_optimizer(depot, stops):
+            return optimize_route(depot, stops)
+
+        monkeypatch.setattr("main.geocode_address", fake_geocode)
+        monkeypatch.setattr("main._call_optimizer", fake_optimizer)
+
+        resp = client.post(
+            "/jobs",
+            files={"file": ("stops.csv", io.BytesIO(csv_text.encode()), "text/csv")},
+            data={"depot_address": depot},
+        )
+        assert resp.status_code == 202
+        return resp.json()["job_id"]
+
+    def test_completed_job_returns_route_and_gpx(self, client, monkeypatch):
+        csv_text = (
+            "address\n"
+            '"Wall Street, New York, NY"\n'
+            '"Central Park, New York, NY"\n'
+            '"Nowhere Street, Atlantis"\n'
+            '"Brooklyn Bridge, New York, NY"\n'
+            '"Grand Central Terminal, New York, NY"\n'
+        )
+        job_id = self._run_job(client, monkeypatch, csv_text, "Times Square, New York, NY")
+
+        job = client.get(f"/jobs/{job_id}").json()
+        assert job["status"] == "completed", job
+
+        route = client.get(f"/jobs/{job_id}/route").json()
+        assert route["depot"]["lat"] == pytest.approx(40.7580)
+        assert len(route["stops"]) == 4
+        assert route["skipped_addresses"] == ["Nowhere Street, Atlantis"]
+        assert [s["visit_order"] for s in route["stops"]] == [1, 2, 3, 4]
+        # input_order preserves CSV row positions (row 3 was skipped)
+        assert sorted(s["input_order"] for s in route["stops"]) == [1, 2, 4, 5]
+        assert route["optimized_distance_km"] <= route["naive_distance_km"]
+
+        gpx = client.get(f"/jobs/{job_id}/route.gpx")
+        assert gpx.status_code == 200
+        assert "application/gpx+xml" in gpx.headers["content-type"]
+        assert gpx.text.count("<trkpt") == 5  # depot + 4 stops
+
+    def test_naive_distance_follows_csv_order(self, client, monkeypatch):
+        """The naive baseline must be the uploaded order, not DB order."""
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "optimizer"))
+        from haversine import route_length
+
+        order = [
+            "Central Park, New York, NY",
+            "Wall Street, New York, NY",
+            "Grand Central Terminal, New York, NY",
+            "Brooklyn Bridge, New York, NY",
+        ]
+        csv_text = "address\n" + "".join(f'"{a}"\n' for a in order)
+        job_id = self._run_job(client, monkeypatch, csv_text, "Times Square, New York, NY")
+
+        route = client.get(f"/jobs/{job_id}/route").json()
+        pts = [self.COORDS["times square, new york, ny"]] + [self.COORDS[a.lower()] for a in order]
+        expected = route_length([{"lat": a, "lng": b} for a, b in pts])
+        assert route["naive_distance_km"] == pytest.approx(round(expected, 2))
+
+    def test_all_addresses_unresolvable_fails_job(self, client, monkeypatch):
+        csv_text = 'address\n"Nowhere 1"\n"Nowhere 2"\n'
+        job_id = self._run_job(client, monkeypatch, csv_text, "Times Square, New York, NY")
+        job = client.get(f"/jobs/{job_id}").json()
+        assert job["status"] == "failed"
+        assert "geocode" in job["error_message"].lower()

@@ -64,32 +64,42 @@ async def init_db():
     Initialize the database.
 
     For SQLite (testing/development), creates all tables via create_all().
-    For PostgreSQL (production), prefers Alembic migrations, but falls back
-    to create_all() if no tables exist yet (first-run local dev convenience).
+
+    For PostgreSQL:
+      - If the schema is managed by Alembic (alembic_version table exists),
+        nothing is done here; run 'alembic upgrade head' instead.
+      - Otherwise (e.g. the docker-compose setup, where db/init.sql may have
+        created only some tables), create any missing tables and add any
+        columns introduced after the initial schema. Both steps are
+        idempotent, so existing data volumes keep working after upgrades.
     """
     if _is_sqlite:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         return
 
-    # PostgreSQL: check if the jobs table exists before auto-creating
-    from sqlalchemy import inspect as sa_inspect
+    import logging
+    from sqlalchemy import inspect as sa_inspect, text
 
-    def _tables_exist(connection):
-        inspector = sa_inspect(connection)
-        return inspector.has_table("jobs")
+    logger = logging.getLogger("routeweave.db")
+
+    def _alembic_managed(connection):
+        return sa_inspect(connection).has_table("alembic_version")
 
     async with engine.begin() as conn:
-        tables_exist = await conn.run_sync(_tables_exist)
-        if not tables_exist:
-            # Fallback for first-run local development without Alembic
-            import logging
-            logger = logging.getLogger("routeweave.db")
-            logger.warning(
-                "No tables found — falling back to create_all(). "
-                "For production, run 'alembic upgrade head' instead."
-            )
-            await conn.run_sync(Base.metadata.create_all)
+        if await conn.run_sync(_alembic_managed):
+            return
+
+        logger.info(
+            "Schema not managed by Alembic — ensuring tables/columns exist. "
+            "For production, prefer 'alembic upgrade head'."
+        )
+        # create_all() uses checkfirst=True: only missing tables are created
+        await conn.run_sync(Base.metadata.create_all)
+        # Columns added after the initial schema (keep in sync with migrations)
+        await conn.execute(
+            text("ALTER TABLE stops ADD COLUMN IF NOT EXISTS input_order INTEGER")
+        )
 
 
 async def get_session() -> AsyncSession:

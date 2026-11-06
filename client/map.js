@@ -36,6 +36,19 @@ let routeLayers = {
 };
 let currentJobId = null;
 let sseConnection = null;
+let jobFinished = false;
+let activeJobId = null; // job whose status we are currently tracking
+
+function getApiKey() {
+    try { return localStorage.getItem('routeweave_api_key') || ''; } catch (e) { return ''; }
+}
+
+function setApiKey(key) {
+    try {
+        if (key) localStorage.setItem('routeweave_api_key', key);
+        else localStorage.removeItem('routeweave_api_key');
+    } catch (e) { /* storage unavailable */ }
+}
 
 // ---------------------------------------------------------------------------
 // DOM References
@@ -68,6 +81,9 @@ const statStops = document.getElementById('stat-stops');
 // Theme Toggle
 // ---------------------------------------------------------------------------
 
+const ICON_SUN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>';
+const ICON_MOON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+
 function initTheme() {
     const saved = localStorage.getItem('routeweave_theme');
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -78,7 +94,7 @@ function initTheme() {
 function setTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('routeweave_theme', theme);
-    themeToggle.textContent = theme === 'dark' ? '🌙' : '☀️';
+    themeToggle.innerHTML = theme === 'dark' ? ICON_MOON : ICON_SUN;
     themeToggle.title = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
 
     // Update Leaflet tiles if map exists
@@ -153,7 +169,7 @@ function handleFile(file) {
     uploadArea.classList.add('has-file');
     uploadContent.innerHTML = `
         <div class="file-name">
-            <span>📄</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             <span>${escapeHtml(file.name)}</span>
             <span style="color: var(--text-muted); font-size: 0.75rem;">(${formatFileSize(file.size)})</span>
         </div>
@@ -169,7 +185,7 @@ optimizeBtn.addEventListener('click', async () => {
     if (!selectedFile) return;
 
     optimizeBtn.disabled = true;
-    btnText.textContent = '⏳ Processing...';
+    btnText.textContent = 'Processing...';
     showStatus('Uploading CSV and starting optimization...', 'processing');
 
     try {
@@ -177,10 +193,22 @@ optimizeBtn.addEventListener('click', async () => {
         formData.append('file', selectedFile);
         formData.append('depot_address', depotInput.value.trim());
 
-        const response = await fetch(`${API_BASE}/jobs`, {
-            method: 'POST',
-            body: formData,
-        });
+        const submit = () => {
+            const headers = {};
+            const key = getApiKey();
+            if (key) headers['X-API-Key'] = key;
+            return fetch(`${API_BASE}/jobs`, { method: 'POST', body: formData, headers });
+        };
+
+        let response = await submit();
+
+        if (response.status === 401) {
+            const entered = window.prompt('This server requires an API key. Enter it to continue:');
+            if (entered && entered.trim()) {
+                setApiKey(entered.trim());
+                response = await submit();
+            }
+        }
 
         if (response.status === 429) {
             showStatus('Rate limit exceeded. Please wait a minute.', 'error');
@@ -189,7 +217,8 @@ optimizeBtn.addEventListener('click', async () => {
         }
 
         if (response.status === 401) {
-            showStatus('API key required. Set X-API-Key header.', 'error');
+            setApiKey('');
+            showStatus('Invalid or missing API key.', 'error');
             resetButton();
             return;
         }
@@ -204,6 +233,9 @@ optimizeBtn.addEventListener('click', async () => {
         const data = await response.json();
         const jobId = data.job_id;
         currentJobId = jobId;
+        activeJobId = jobId;
+        jobFinished = false;
+        showStatus('Job queued, waiting for worker...', 'processing');
 
         if (data.status === 'completed') {
             showStatus('Route optimized successfully!', 'success');
@@ -246,7 +278,11 @@ function connectSSE(jobId) {
 
         evtSource.onerror = () => {
             evtSource.close();
-            // Silently fall back — polling will take over if needed
+            if (sseConnection === evtSource) sseConnection = null;
+            // Stream dropped before a terminal state: switch to polling
+            if (!jobFinished && activeJobId === jobId) {
+                pollJob(jobId);
+            }
         };
 
         return true;
@@ -264,7 +300,11 @@ function disconnectSSE() {
 }
 
 function handleJobStatus(status, jobId, errorMessage) {
+    if (jobFinished || jobId !== activeJobId) return;
     switch (status) {
+        case 'pending':
+            showStatus('Job queued, waiting for worker...', 'processing');
+            break;
         case 'geocoding':
             showStatus('Geocoding delivery addresses...', 'processing');
             break;
@@ -272,6 +312,7 @@ function handleJobStatus(status, jobId, errorMessage) {
             showStatus('Running route optimization...', 'processing');
             break;
         case 'completed':
+            jobFinished = true;
             disconnectSSE();
             showStatus('Route optimized successfully!', 'success');
             loadRoute(jobId);
@@ -279,8 +320,16 @@ function handleJobStatus(status, jobId, errorMessage) {
             resetButton();
             break;
         case 'failed':
+            jobFinished = true;
             disconnectSSE();
             showStatus(`Failed: ${errorMessage || 'Unknown error'}`, 'error');
+            refreshHistory();
+            resetButton();
+            break;
+        case 'not_found':
+            jobFinished = true;
+            disconnectSSE();
+            showStatus('Job no longer exists (it may have been deleted).', 'error');
             refreshHistory();
             resetButton();
             break;
@@ -302,8 +351,14 @@ async function pollJob(jobId) {
         }
         attempts++;
 
+        if (jobFinished || jobId !== activeJobId) return;
+
         try {
             const response = await fetch(`${API_BASE}/jobs/${jobId}`);
+            if (response.status === 404) {
+                handleJobStatus('not_found', jobId);
+                return;
+            }
             if (!response.ok) {
                 showStatus('Failed to check job status.', 'error');
                 resetButton();
@@ -384,6 +439,18 @@ function showResults(data) {
             </div>
         `;
         stopList.appendChild(depotEl);
+    }
+
+    // Addresses that could not be geocoded
+    const skipped = data.skipped_addresses || [];
+    if (skipped.length > 0) {
+        const warn = document.createElement('div');
+        warn.className = 'stop-item';
+        warn.style.cssText = 'flex-direction: column; align-items: flex-start; color: var(--text-muted); font-size: 0.75rem;';
+        const plural = skipped.length > 1;
+        warn.innerHTML = `<strong>${skipped.length} address${plural ? 'es' : ''} could not be located and ${plural ? 'were' : 'was'} skipped:</strong>`
+            + skipped.map(a => `<div>${escapeHtml(a)}</div>`).join('');
+        stopList.appendChild(warn);
     }
 
     // Add stops
@@ -470,7 +537,8 @@ function drawRoute(data) {
     if (depot.lat && depot.lng) {
         naiveCoords.push([depot.lat, depot.lng]);
     }
-    const naiveStops = [...stops].sort((a, b) => a.address.localeCompare(b.address));
+    // Naive route = original CSV order, matching the backend's naive distance
+    const naiveStops = [...stops].sort((a, b) => (a.input_order ?? 0) - (b.input_order ?? 0));
     naiveStops.forEach(stop => {
         if (stop.lat && stop.lng) {
             naiveCoords.push([stop.lat, stop.lng]);
@@ -525,7 +593,7 @@ function drawRoute(data) {
         const depotMarker = L.marker([depot.lat, depot.lng], { icon: depotIcon })
             .addTo(map)
             .bindPopup(`
-                <div class="popup-title">📍 Depot (Start)</div>
+                <div class="popup-title">Depot (Start)</div>
                 <div class="popup-address">${escapeHtml(depot.address)}</div>
             `);
         routeLayers.markers.push(depotMarker);
@@ -687,7 +755,7 @@ function showStatus(message, type = 'processing') {
 
 function resetButton() {
     optimizeBtn.disabled = !selectedFile;
-    btnText.textContent = '🚀 Optimize Route';
+    btnText.textContent = 'Optimize Route';
 }
 
 function escapeHtml(text) {

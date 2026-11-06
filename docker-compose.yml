@@ -47,9 +47,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      optimizer:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://routeweave:${DB_PASSWORD:-routeweave_secret}@db:5432/routeweave
       OPTIMIZER_URL: http://optimizer:8001
+      # Optional — empty values leave the feature disabled (see .env.example)
+      API_KEY: ${API_KEY:-}
+      ADMIN_KEY: ${ADMIN_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
     ports:
       - "8000:8000"
     networks:

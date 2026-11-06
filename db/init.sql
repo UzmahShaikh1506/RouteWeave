@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS stops (
     raw_address VARCHAR(500) NOT NULL,
     lat DOUBLE PRECISION,
     lng DOUBLE PRECISION,
-    visit_order INTEGER
+    visit_order INTEGER,
+    input_order INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS routes (
@@ -32,7 +33,18 @@ CREATE TABLE IF NOT EXISTS routes (
     pct_improvement DOUBLE PRECISION NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS geocode_cache (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    address_hash VARCHAR(64) NOT NULL UNIQUE,
+    raw_address VARCHAR(500) NOT NULL,
+    lat DOUBLE PRECISION NOT NULL,
+    lng DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    hit_count INTEGER NOT NULL DEFAULT 1
+);
+
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_stops_job_id ON stops(job_id);
 CREATE INDEX IF NOT EXISTS idx_routes_job_id ON routes(job_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_geocode_cache_hash ON geocode_cache(address_hash);

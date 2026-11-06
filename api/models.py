@@ -71,6 +71,9 @@ class Stop(Base):
     lat = Column(Float, nullable=True)
     lng = Column(Float, nullable=True)
     visit_order = Column(Integer, nullable=True)
+    # Original row position in the uploaded CSV (1-based). Defines the
+    # "naive" route used for the before/after comparison.
+    input_order = Column(Integer, nullable=True)
 
     # Relationships
     job = relationship("Job", back_populates="stops")
@@ -124,6 +127,7 @@ class StopResponse(BaseModel):
     lat: float | None = None
     lng: float | None = None
     visit_order: int | None = None
+    input_order: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -136,6 +140,7 @@ class RouteResponse(BaseModel):
     pct_improvement: float
     depot: StopResponse | None = None
     stops: list[StopResponse] = []
+    skipped_addresses: list[str] = []
 
 
 class JobResponse(BaseModel):

@@ -203,7 +203,12 @@ async def _process_job(job_id: uuid.UUID) -> None:
             await session.commit()
 
             # Fetch stops
-            result = await session.execute(select(Stop).where(Stop.job_id == job.id))
+            # Fetch stops in original CSV order (defines the naive route)
+            result = await session.execute(
+                select(Stop)
+                .where(Stop.job_id == job.id)
+                .order_by(Stop.input_order)
+            )
             stops = result.scalars().all()
 
             # Geocode depot (with cache)
@@ -467,11 +472,12 @@ async def create_job(
     )
     session.add(job)
 
-    for addr in addresses:
+    for position, addr in enumerate(addresses, start=1):
         stop = Stop(
             id=uuid.uuid4(),
             job_id=job.id,
             raw_address=addr,
+            input_order=position,
         )
         session.add(stop)
 
@@ -528,7 +534,7 @@ async def job_events(
                 payload = {
                     "status": current.status,
                     "error_message": current.error_message,
-                    "updated_at": current.created_at.isoformat() if current.created_at else None,
+                    "created_at": current.created_at.isoformat() if current.created_at else None,
                 }
                 yield f"data: {json.dumps(payload)}\n\n"
 
@@ -672,6 +678,12 @@ async def get_route(
         [s for s in job.stops if s.visit_order is not None],
         key=lambda s: s.visit_order,
     )
+    # Stops that could not be geocoded are excluded from the route;
+    # report them so the client can tell the user.
+    skipped = sorted(
+        [s for s in job.stops if s.visit_order is None],
+        key=lambda s: s.input_order or 0,
+    )
 
     depot_stop = None
     if job.depot_lat is not None and job.depot_lng is not None:
@@ -696,9 +708,11 @@ async def get_route(
                 lat=s.lat,
                 lng=s.lng,
                 visit_order=s.visit_order,
+                input_order=s.input_order,
             )
             for s in sorted_stops
         ],
+        skipped_addresses=[s.raw_address for s in skipped],
     )
 
 
