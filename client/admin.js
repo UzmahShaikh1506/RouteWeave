@@ -107,23 +107,31 @@ function renderHealth(data) {
     const statuses = data.jobs.by_status || {};
     const total = data.jobs.total;
 
-            const items = [
-                { label: 'API Service', online: true },
-                { label: 'Database', online: data.system && true },
-                { label: 'Pending Jobs', online: (statuses.pending || 0) < 10, count: statuses.pending || 0 },
-                { label: 'Failed Jobs', online: (statuses.failed || 0) === 0, count: statuses.failed || 0 },
-                { label: 'Cache Hits', online: true, count: data.geocoding_cache.total_hits },
-            ];
+    const pending = statuses.pending || 0;
+    const failed = statuses.failed || 0;
+    const inFlight = (statuses.geocoding || 0) + (statuses.optimizing || 0);
 
-            grid.innerHTML = items.map(item => `
-                <div class="health-item">
-                    <div class="health-dot ${item.online ? 'online' : 'offline'}"></div>
-                    <div>
-                        <div style="font-weight: 600; color: var(--text-heading);">${item.label}</div>
-                        ${item.count !== undefined ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${item.count}</div>` : ''}
-                    </div>
-                </div>
-            `).join('');
+    const items = [
+        { label: 'API Service', state: 'online', count: 'Operational' },
+        { label: 'Database', state: 'online', count: 'Connected' },
+        { label: 'In Transit', state: 'online', count: `${inFlight} job${inFlight === 1 ? '' : 's'} processing` },
+        { label: 'Queue', state: pending < 10 ? 'online' : 'warn', count: `${pending} pending` },
+        { label: 'Failed Jobs', state: failed === 0 ? 'online' : 'warn', count: `${failed} of ${total}` },
+        { label: 'Geocode Cache', state: 'online', count: `${data.geocoding_cache.total_hits} hits` },
+    ];
+
+    grid.innerHTML = items.map(item => `
+        <div class="health-item">
+            <span class="health-dot ${item.state}" aria-hidden="true"></span>
+            <div>
+                <div class="health-label">${item.label}</div>
+                <div class="health-count">${item.count}</div>
+            </div>
+        </div>
+    `).join('');
+
+    const updated = document.getElementById('last-updated');
+    if (updated) updated.textContent = `Updated ${new Date().toLocaleTimeString()} · refresh 10s`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -156,20 +164,24 @@ function renderJobsTable(jobs) {
     }
 
     tbody.innerHTML = jobs.map(job => {
-        const date = new Date(job.created_at).toLocaleString();
+        const id = escapeHtml(job.id);
+        const status = escapeHtml(job.status);
+        const date = new Date(job.created_at).toLocaleString(undefined, {
+            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+        });
         const routeInfo = job.route
-            ? `${job.route.naive_distance_km.toFixed(1)} → ${job.route.optimized_distance_km.toFixed(1)} km`
+            ? `${job.route.naive_distance_km.toFixed(1)} → ${job.route.optimized_distance_km.toFixed(1)} km<span class="saved">−${job.route.pct_improvement.toFixed(1)}%</span>`
             : '—';
         return `
-            <tr data-job-id="${job.id}">
-                <td><code style="font-size: 0.7rem; color: var(--text-muted);">${job.id.slice(0, 8)}…</code></td>
-                <td><span class="badge ${job.status}">${job.status}</span></td>
-                <td>${date}</td>
-                <td style="max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(job.depot_address || '')}">${escapeHtml(job.depot_address || '—')}</td>
-                <td>${job.stop_count}</td>
-                <td>${routeInfo}</td>
-                <td>
-                    <button class="btn btn-danger btn-sm" onclick="deleteJob('${job.id}')">Delete</button>
+            <tr data-job-id="${id}">
+                <td data-label="Job ID"><span class="job-id" title="${id}">JOB-${id.slice(0, 8).toUpperCase()}</span></td>
+                <td data-label="Status"><span class="badge ${status}">${status}</span></td>
+                <td data-label="Created" class="cell-num">${date}</td>
+                <td data-label="Depot" class="cell-depot" title="${escapeHtml(job.depot_address || '')}">${escapeHtml(job.depot_address || '—')}</td>
+                <td data-label="Stops" class="cell-num">${job.stop_count}</td>
+                <td data-label="Route" class="cell-route">${routeInfo}</td>
+                <td class="cell-actions">
+                    <button class="btn btn-danger btn-sm" data-delete="${id}" type="button">Delete</button>
                 </td>
             </tr>
         `;
@@ -193,6 +205,11 @@ async function deleteJob(jobId) {
         console.error('Delete error:', e);
     }
 }
+
+document.getElementById('jobs-tbody').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-delete]');
+    if (btn) deleteJob(btn.dataset.delete);
+});
 
 statusFilter.addEventListener('change', loadJobs);
 refreshJobsBtn.addEventListener('click', () => { loadJobs(); loadStats(); });

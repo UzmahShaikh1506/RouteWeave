@@ -84,44 +84,54 @@ Browser (localhost:3000)
 ### Main App (`http://localhost:3000`)
 | Feature | Details |
 |---------|---------|
-| **Drag & Drop Upload** | Visual upload zone with hover/drag states. Accepts `.csv` only. |
-| **Depot Input** | Text field for starting location. Falls back to first CSV address if empty. |
-| **Live Status Bar** | Processing → Geocoding → Optimizing → Success/Error with color-coded states. |
-| **Before/After Stats** | Four stat cards: Before km, After km, Saved %, Stops count. |
-| **Stop List** | Scrollable list showing depot + stops in optimized visit order. |
-| **Route Legend** | Color key: red dashed = original, green solid = optimized. |
-| **Skipped Addresses** | Addresses Nominatim can't resolve are listed under the stop list instead of disappearing silently. |
+| **Drag & Drop Upload** | Manifest-style upload zone with hover/drag states. Accepts `.csv` only. |
+| **Depot Input** | Warehouse field for the starting location. Falls back to the first CSV address if empty. |
+| **Pipeline Tracker** | Shipment-style progress rail: Manifest → Geocode → Optimize → Dispatch, driven by live job status. |
+| **Live Status Bar** | Color-coded processing / success / error messages. |
+| **Distance Report** | Four KPI tiles: Before km, After km, Saved %, Stops. |
+| **Route Manifest** | Timeline of depot + stops in optimized order, linked by a dashed route line. |
+| **Route Legend** | Grey dashed = original CSV order, blue solid = optimized route. |
+| **Skipped Addresses** | Addresses Nominatim can't resolve are listed above the manifest instead of disappearing silently. |
 | **API Key Prompt** | When the server has `API_KEY` set, the UI prompts once and remembers the key. |
-| **Job History** | Sidebar list of recent jobs with status badges. Click completed job to reload on map. |
-| **GPX Download** | Button in stop list to download `.gpx` after optimization. |
-| **Theme Toggle** | Sun/moon icon in header. Dark/light mode with `localStorage` persistence. |
-| **Admin Link** | Quick navigation to `/admin` dashboard. |
+| **Shipment Log** | Recent jobs with `JOB-XXXXXXXX` IDs and status badges. Click (or Enter) on a completed job to reload it. |
+| **GPX Download** | Button in the Route Manifest header downloads a `.gpx` file. |
+| **Navigation** | Top bar links between Route Planner and Operations (admin). |
 
 ### Interactive Map (Leaflet.js)
 | Feature | Details |
 |---------|---------|
-| **Dark & Light Tiles** | CARTO dark_all / light_all basemaps. Auto-switches with theme. |
-| **Depot Marker** | Warm amber gradient circle marker with home icon. |
-| **Stop Markers** | Coral gradient numbered circles in optimized order. |
-| **Route Polylines** | Red dashed = naive route (original CSV order), green solid = optimized route. |
-| **Route Animation** | Animated delivery vehicle marker travels the optimized route with pulsing glow. |
-| **Popups** | Click any marker → address info. Styled to match theme. |
-| **Auto-fit Bounds** | Map zooms to show entire route with padding. |
+| **Basemap** | OpenStreetMap tiles, desaturated with a CSS filter so routes stand out. |
+| **Dispatch Toolbar** | Header above the map shows the loaded job, stop count and optimized distance. |
+| **Depot Marker** | Safety-orange rounded-square marker with warehouse icon. |
+| **Stop Markers** | Container-blue numbered markers in optimized order. |
+| **Route Polylines** | Grey dashed = naive route (original CSV order), blue solid = optimized route. |
+| **Route Animation** | Truck marker travels the optimized route with a pulsing orange ring. |
+| **Popups** | Click any marker → address info, styled as a shipping label. |
+| **Auto-fit Bounds** | Map zooms to show the entire route with padding. |
 
 ### Admin Dashboard (`http://localhost:3000/admin`)
 | Feature | Details |
 |---------|---------|
 | **Secure Login** | Admin key input with localStorage remember. |
-| **Stats Grid** | 6 cards: Total Jobs, Completed, Success Rate, Avg Improvement, Distance Saved, Cache Entries. |
-| **System Health** | Visual status indicators: API Service, Database, Pending Jobs, Failed Jobs, Cache Hits. |
-| **Jobs Table** | Full listing with ID, Status badge, Created date, Depot, Stops, Route summary, Delete action. |
+| **KPI Tiles** | 6 tiles: Total Jobs, Delivered, Success Rate, Avg Improvement, Distance Saved, Cached Addresses. |
+| **System Health** | API, Database, In Transit, Queue, Failed Jobs, Geocode Cache — green/amber status dots. |
+| **Jobs Table** | ID, status badge, created date, depot, stops, route summary with % saved, delete action. On phones each row becomes a stacked card. |
 | **Status Filtering** | Dropdown to filter jobs by pending/geocoding/optimizing/completed/failed. |
-| **Auto Refresh** | Dashboard polls every 10 seconds for live updates. |
-| **Job Deletion** | One-click delete with confirmation dialog. |
+| **Auto Refresh** | Polls every 10 seconds, shows last-updated time. |
+| **Job Deletion** | Delete with confirmation dialog. |
 
-### Visual Design
+### Visual Design — Logistics Console (light only)
 | Feature | Details |
 |---------|---------|
+| **Palette** | Warm concrete background (#F4F2ED), white surfaces, safety orange actions (#E8590C), container blue route data (#1D4E89), green for savings. |
+| **Supply-Chain Motifs** | Caution-tape strip under the header, warehouse floor-plan grid background, manifest-style card labels (`01 · LOAD MANIFEST`), pallet-label strips on KPI tiles. |
+| **Typography** | IBM Plex Sans for UI text, IBM Plex Mono for IDs, figures and labels (tracking-number feel). |
+| **Shared Stylesheet** | `styles.css` holds tokens and components for both pages; `admin.css` adds dashboard-only rules. |
+| **SVG Icons** | No emojis. All icons are inline SVG. |
+| **Accessibility** | Visible focus rings, keyboard-operable upload and history, `aria-live` status, reduced-motion support. |
+| **Responsive** | Wide monitor → laptop → tablet → phone breakpoints. Map stays in view (sticky) on desktop; on tablets/phones it moves above the sidebar. No horizontal scroll down to 320px. |
+
+---------|---------|
 | **Premium Color Palette** | Deep navy backgrounds (#0B1120) + coral/rose accent (#F43F5E) + sky blue data (#38BDF8) + amber highlights. |
 | **Ambient Glow** | Subtle radial gradient orbs in background for atmosphere. |
 | **Card Depth** | Layered shadows, subtle top highlights, hover lift effects. |
@@ -224,10 +234,10 @@ cd client && python -m http.server 3000
 | `api/database.py` | Async engine + session factory |
 | `optimizer/optimize.py` | NN + 2-Opt algorithm |
 | `client/index.html` | Main app markup |
-| `client/styles.css` | Main app theme |
+| `client/styles.css` | Design tokens + shared components (both pages) |
 | `client/map.js` | Upload, SSE, polling, map, animation, GPX |
 | `client/admin.html` | Admin dashboard markup |
-| `client/admin.css` | Admin dashboard theme |
+| `client/admin.css` | Admin-only layout (login, KPI tiles, responsive table) |
 | `client/admin.js` | Admin stats, job table, filtering, deletion |
 | `docker-compose.yml` | Service orchestration |
 | `.github/workflows/ci.yml` | CI/CD pipeline |

@@ -4,11 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="RouteWeave — Optimize your last-mile delivery routes. Upload addresses, get optimized routes with before/after distance comparison on an interactive map.">
-    <title>RouteWeave — Delivery Route Optimizer</title>
+    <meta name="theme-color" content="#F4F2ED">
+    <title>RouteWeave — Route Planner</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
@@ -19,40 +20,48 @@
 </head>
 <body>
 
-<div class="app-container">
+<header class="topbar" id="app-header">
+    <div class="topbar-inner">
+        <a href="/" class="brand" aria-label="RouteWeave home">
+            <span class="brand-mark" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="M7.5 6H15a3.5 3.5 0 0 1 0 7H9a3.5 3.5 0 0 0 0 7h7.5"/></svg>
+            </span>
+            <span class="brand-text">
+                <span class="brand-name">RouteWeave</span>
+                <span class="brand-tag">Last-Mile Logistics</span>
+            </span>
+        </a>
+        <nav class="topnav" aria-label="Primary">
+            <a href="/" class="topnav-link active" aria-current="page">Route Planner</a>
+            <a href="/admin" class="topnav-link">Operations</a>
+        </nav>
+    </div>
+    <div class="caution-tape" aria-hidden="true"></div>
+</header>
 
-    <header class="header" id="app-header">
-        <div class="logo">
-            <div class="logo-icon">RW</div>
-            <div>
-                <div class="logo-text">RouteWeave</div>
-                <div class="logo-subtitle">Route Optimization</div>
-            </div>
-        </div>
-        <div class="header-actions">
-            <button class="theme-toggle" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-            </button>
-            <a href="/admin" class="header-link">Admin</a>
-        </div>
-    </header>
+<div class="app-shell">
 
     <aside class="sidebar">
 
         <section class="card" id="upload-card">
-            <div class="card-title">
-                New Route
+            <div class="card-head">
+                <span class="card-kicker">01 · Load Manifest</span>
+                <h2 class="card-title">New Delivery Run</h2>
             </div>
 
             <div class="form-group">
-                <label class="form-label" for="depot-address">Starting Location (Depot)</label>
-                <input
-                    type="text"
-                    id="depot-address"
-                    class="form-input"
-                    placeholder="e.g. 123 Main St, New York, NY"
-                    autocomplete="street-address"
-                >
+                <label class="form-label" for="depot-address">Depot / Warehouse</label>
+                <div class="input-icon">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V9l9-6 9 6v12"/><path d="M8 21v-7h8v7"/></svg>
+                    <input
+                        type="text"
+                        id="depot-address"
+                        class="form-input"
+                        placeholder="e.g. 123 Main St, New York, NY"
+                        autocomplete="street-address"
+                    >
+                </div>
+                <p class="form-hint">Leave blank to start from the first address in the file.</p>
             </div>
 
             <div
@@ -64,86 +73,112 @@
             >
                 <div id="upload-content">
                     <div class="upload-icon">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/><path d="M7.5 5.5l9 5"/></svg>
                     </div>
-                    <div class="upload-text">Drop your CSV here or click to browse</div>
-                    <div class="upload-hint">Requires an "address" column. Max 50 stops, 5 MB.</div>
+                    <div class="upload-text">Drop your address CSV here</div>
+                    <div class="upload-hint">or <span class="link-like">browse files</span> · needs an <code>address</code> column · max 50 stops</div>
                 </div>
-                <input type="file" id="file-input" accept=".csv" aria-hidden="true">
+                <input type="file" id="file-input" accept=".csv" aria-hidden="true" hidden>
             </div>
 
-            <div style="margin-top: var(--space-lg);">
-                <button class="btn btn-primary" id="optimize-btn" disabled>
-                    <span id="btn-text">Optimize Route</span>
-                </button>
+            <button class="btn btn-primary btn-block" id="optimize-btn" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+                <span id="btn-text">Optimize Route</span>
+            </button>
+
+            <ol class="pipeline" id="pipeline" aria-label="Job progress">
+                <li class="pipeline-step" data-step="upload"><span class="pipeline-dot"></span><span class="pipeline-label">Manifest</span></li>
+                <li class="pipeline-step" data-step="geocoding"><span class="pipeline-dot"></span><span class="pipeline-label">Geocode</span></li>
+                <li class="pipeline-step" data-step="optimizing"><span class="pipeline-dot"></span><span class="pipeline-label">Optimize</span></li>
+                <li class="pipeline-step" data-step="completed"><span class="pipeline-dot"></span><span class="pipeline-label">Dispatch</span></li>
+            </ol>
+
+            <div class="status-bar" id="status-bar" role="status" aria-live="polite" style="display: none;">
+                <div class="spinner" id="status-spinner"></div>
+                <span id="status-text">Processing...</span>
             </div>
         </section>
 
-        <div class="status-bar" id="status-bar" style="display: none;">
-            <div class="spinner" id="status-spinner"></div>
-            <span id="status-text">Processing...</span>
-        </div>
-
         <section class="card" id="results-card" style="display: none;">
-            <div class="card-title">
-                Results
+            <div class="card-head">
+                <span class="card-kicker">02 · Run Summary</span>
+                <h2 class="card-title">Distance Report</h2>
             </div>
             <div class="stats-grid">
                 <div class="stat-item">
-                    <div class="stat-value naive" id="stat-naive">—</div>
-                    <div class="stat-label">Before (km)</div>
+                    <div class="stat-label">Before</div>
+                    <div class="stat-value naive"><span id="stat-naive">—</span><small>km</small></div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-value optimized" id="stat-optimized">—</div>
-                    <div class="stat-label">After (km)</div>
+                    <div class="stat-label">After</div>
+                    <div class="stat-value optimized"><span id="stat-optimized">—</span><small>km</small></div>
                 </div>
-                <div class="stat-item">
-                    <div class="stat-value improvement" id="stat-improvement">—</div>
+                <div class="stat-item highlight">
                     <div class="stat-label">Saved</div>
+                    <div class="stat-value improvement" id="stat-improvement">—</div>
                 </div>
                 <div class="stat-item">
-                    <div class="stat-value" id="stat-stops">—</div>
                     <div class="stat-label">Stops</div>
+                    <div class="stat-value" id="stat-stops">—</div>
                 </div>
             </div>
         </section>
 
         <section class="card" id="stops-card" style="display: none;">
-            <div class="card-title" style="justify-content: space-between;">
-                <span>Optimized Order</span>
+            <div class="card-head card-head-row">
+                <div>
+                    <span class="card-kicker">03 · Route Manifest</span>
+                    <h2 class="card-title">Optimized Stop Order</h2>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="gpx-btn" type="button" title="Download GPX for GPS devices">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    GPX
+                </button>
             </div>
             <div class="legend">
-                <div class="legend-item">
-                    <div class="legend-line naive"></div>
-                    <span>Original</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-line optimized"></div>
-                    <span>Optimized</span>
-                </div>
+                <div class="legend-item"><span class="legend-line naive"></span>Original order</div>
+                <div class="legend-item"><span class="legend-line optimized"></span>Optimized route</div>
             </div>
-            <div class="stop-list" id="stop-list" style="margin-top: var(--space-md);"></div>
+            <div class="stop-list" id="stop-list"></div>
         </section>
 
         <section class="card" id="history-card">
-            <div class="card-title" style="justify-content: space-between;">
-                <span>Recent Jobs</span>
-                <button class="btn btn-secondary" id="refresh-history-btn">Refresh</button>
-            </div>
-            <div id="history-list">
-                <div style="text-align: center; color: var(--text-muted); font-size: 0.8125rem; padding: var(--space-md);">
-                    No jobs yet. Upload a CSV to get started.
+            <div class="card-head card-head-row">
+                <div>
+                    <span class="card-kicker">Shipment Log</span>
+                    <h2 class="card-title">Recent Jobs</h2>
                 </div>
+                <button class="btn btn-secondary btn-sm" id="refresh-history-btn" type="button">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    Refresh
+                </button>
+            </div>
+            <div id="history-list" class="history-list">
+                <div class="empty-note">No jobs yet. Upload a CSV to get started.</div>
             </div>
         </section>
     </aside>
 
-    <main class="map-container" id="map-wrapper">
+    <main class="map-panel" id="map-wrapper">
+        <div class="map-toolbar">
+            <span class="map-toolbar-title">
+                <span class="live-dot" aria-hidden="true"></span>
+                Dispatch Map
+            </span>
+            <span class="map-toolbar-meta" id="map-meta">Awaiting manifest</span>
+        </div>
         <div id="map">
             <div class="empty-state" id="map-empty">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.4;"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
-                <h3>No Route Yet</h3>
-                <p>Upload a CSV with delivery addresses to see the optimized route on the map.</p>
+                <div class="empty-illustration" aria-hidden="true">
+                    <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+                </div>
+                <h3>No route planned yet</h3>
+                <p>Load a manifest of delivery addresses and RouteWeave will plot the most efficient run from your depot.</p>
+                <ol class="empty-steps">
+                    <li><span>1</span>Set your depot</li>
+                    <li><span>2</span>Upload a CSV</li>
+                    <li><span>3</span>Dispatch the route</li>
+                </ol>
             </div>
         </div>
     </main>
