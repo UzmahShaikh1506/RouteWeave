@@ -81,8 +81,8 @@ const statStops = document.getElementById('stat-stops');
 
 // Map look: light street basemap, route colours match the stylesheet tokens
 const TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-const ROUTE_NAIVE_COLOR = '#9AA1AD';
-const ROUTE_OPTIMIZED_COLOR = '#1D4E89';
+const ROUTE_NAIVE_COLOR = '#94A3B8';
+const ROUTE_OPTIMIZED_COLOR = '#1D5BD8';
 
 // ---------------------------------------------------------------------------
 // Pipeline tracker (Manifest → Geocode → Optimize → Dispatch)

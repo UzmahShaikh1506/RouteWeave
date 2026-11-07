@@ -37,7 +37,7 @@
     max-width: 420px;
     background: var(--surface);
     border: 1px solid var(--line);
-    border-top: 4px solid var(--orange);
+    border-top: 4px solid var(--accent);
     border-radius: var(--radius-lg);
     padding: clamp(24px, 5vw, 40px);
     text-align: center;
@@ -50,8 +50,8 @@
     height: 56px;
     margin: 0 auto var(--space-md);
     border-radius: 50%;
-    background: var(--orange-soft);
-    color: var(--orange);
+    background: var(--accent-soft);
+    color: var(--accent);
     display: grid;
     place-items: center;
 }
@@ -119,7 +119,7 @@
 }
 .stat-card .stat-value { font-size: clamp(1.4rem, 2.6vw, 1.85rem); }
 .stat-value.success { color: var(--green); }
-.stat-value.accent { color: var(--orange); }
+.stat-value.accent { color: var(--accent); }
 
 /* Health */
 .health-grid {
@@ -153,7 +153,7 @@
     padding: 9px 34px 9px 12px;
     border-radius: var(--radius-md);
     border: 1px solid var(--line-strong);
-    background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B7484' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 12px center;
+    background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235B6B82' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 12px center;
     -webkit-appearance: none;
     appearance: none;
     color: var(--ink);
@@ -163,7 +163,7 @@
     outline: none;
     transition: border-color var(--transition), box-shadow var(--transition);
 }
-.form-select:focus { border-color: var(--orange); box-shadow: 0 0 0 3px rgba(232, 89, 12, 0.15); }
+.form-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(29, 91, 216, 0.15); }
 
 /* ─── Jobs table ──────────────────────────────────────────── */
 

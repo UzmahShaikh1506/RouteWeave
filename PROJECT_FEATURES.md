@@ -102,10 +102,10 @@ Browser (localhost:3000)
 |---------|---------|
 | **Basemap** | OpenStreetMap tiles, desaturated with a CSS filter so routes stand out. |
 | **Dispatch Toolbar** | Header above the map shows the loaded job, stop count and optimized distance. |
-| **Depot Marker** | Safety-orange rounded-square marker with warehouse icon. |
-| **Stop Markers** | Container-blue numbered markers in optimized order. |
+| **Depot Marker** | Amber rounded-square marker with warehouse icon. |
+| **Stop Markers** | Navy numbered markers in optimized order. |
 | **Route Polylines** | Grey dashed = naive route (original CSV order), blue solid = optimized route. |
-| **Route Animation** | Truck marker travels the optimized route with a pulsing orange ring. |
+| **Route Animation** | Truck marker travels the optimized route with a pulsing teal ring. |
 | **Popups** | Click any marker → address info, styled as a shipping label. |
 | **Auto-fit Bounds** | Map zooms to show the entire route with padding. |
 
@@ -120,12 +120,12 @@ Browser (localhost:3000)
 | **Auto Refresh** | Polls every 10 seconds, shows last-updated time. |
 | **Job Deletion** | Delete with confirmation dialog. |
 
-### Visual Design — Logistics Console (light only)
+### Visual Design — Enterprise Freight (light only)
 | Feature | Details |
 |---------|---------|
-| **Palette** | Warm concrete background (#F4F2ED), white surfaces, safety orange actions (#E8590C), container blue route data (#1D4E89), green for savings. |
-| **Supply-Chain Motifs** | Caution-tape strip under the header, warehouse floor-plan grid background, manifest-style card labels (`01 · LOAD MANIFEST`), pallet-label strips on KPI tiles. |
-| **Typography** | IBM Plex Sans for UI text, IBM Plex Mono for IDs, figures and labels (tracking-number feel). |
+| **Palette** | Navy command bar (#0B2545), cool slate workspace (#F1F4F8), white surfaces, signal blue actions and route (#1D5BD8), amber depot (#F59E0B), teal vehicle, green for savings. |
+| **Supply-Chain Motifs** | Lane-stripe rail under the command bar (blue / teal / amber), dispatch-map dot grid background, manifest-style card labels (`01 · LOAD MANIFEST`), pallet-label strips on KPI tiles. |
+| **Typography** | Inter for UI text, JetBrains Mono for IDs, figures and labels (tracking-number feel). |
 | **Shared Stylesheet** | `styles.css` holds tokens and components for both pages; `admin.css` adds dashboard-only rules. |
 | **SVG Icons** | No emojis. All icons are inline SVG. |
 | **Accessibility** | Visible focus rings, keyboard-operable upload and history, `aria-live` status, reduced-motion support. |
