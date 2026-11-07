@@ -6,17 +6,24 @@ Runs as a separate container so it can be scaled or swapped
 independently of the API layer.
 """
 
+import logging
+import os
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from optimize import optimize_route
 
+logger = logging.getLogger("routeweave.optimizer")
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "true").lower() in ("1", "true", "yes")
+
 app = FastAPI(
     title="RouteWeave Optimizer",
     description="Internal route optimization microservice",
     version="1.0.0",
-    docs_url="/docs",
+    docs_url="/docs" if ENABLE_DOCS else None,
     redoc_url=None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
 )
 
 
@@ -26,8 +33,8 @@ app = FastAPI(
 
 class StopIn(BaseModel):
     """A delivery stop with coordinates."""
-    id: str = ""
-    address: str = ""
+    id: str = Field("", max_length=64)
+    address: str = Field("", max_length=300)
     lat: float = Field(..., ge=-90, le=90)
     lng: float = Field(..., ge=-180, le=180)
 
@@ -83,8 +90,6 @@ async def optimize(request: OptimizeRequest):
         result = optimize_route(depot, stops)
 
         return OptimizeResponse(**result)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Optimization failed: {str(e)}",
-        )
+    except Exception:
+        logger.exception("Optimization failed")
+        raise HTTPException(status_code=500, detail="Optimization failed.")

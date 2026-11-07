@@ -85,6 +85,15 @@ def _no_network_geocoding(monkeypatch):
     monkeypatch.setattr("main.geocode_address", _offline_geocode)
 
 
+@pytest.fixture(autouse=True)
+def _reset_auth_lockout():
+    """Failed-key attempts from one test must not lock out the next."""
+    import main
+    main._auth_failure_store.clear()
+    yield
+    main._auth_failure_store.clear()
+
+
 # ─────────────────────────────────────────────────────────────
 # Health
 # ─────────────────────────────────────────────────────────────
@@ -627,3 +636,131 @@ class TestFullPipeline:
         job = client.get(f"/jobs/{job_id}").json()
         assert job["status"] == "failed"
         assert "geocode" in job["error_message"].lower()
+
+
+# ─────────────────────────────────────────────────────────────
+# Security hardening (see SECURITY.md)
+# ─────────────────────────────────────────────────────────────
+
+class TestSecurity:
+    """Regression tests for the security checklist."""
+
+    def _reset_rate_limit(self):
+        import main
+        main._rate_limit_store.clear()
+
+    def test_read_endpoints_require_api_key_when_configured(self, client, monkeypatch):
+        monkeypatch.setattr("main.API_KEY", "secret-test-key")
+        job_id = str(uuid.uuid4())
+        for path in ["/jobs", f"/jobs/{job_id}", f"/jobs/{job_id}/route",
+                     f"/jobs/{job_id}/route.gpx", f"/jobs/{job_id}/events",
+                     "/analytics/overview"]:
+            assert client.get(path).status_code == 401, path
+            ok = client.get(path, headers={"X-API-Key": "secret-test-key"})
+            assert ok.status_code != 401, path
+
+    def test_read_endpoints_open_when_api_key_unset(self, client):
+        assert client.get("/jobs").status_code == 200
+        assert client.get("/analytics/overview").status_code == 200
+
+    def test_repeated_bad_admin_keys_are_locked_out(self, client, monkeypatch):
+        monkeypatch.setattr("main.ADMIN_KEY", "secret-admin")
+        for _ in range(10):
+            assert client.get("/admin/stats", headers={"X-Admin-Key": "guess"}).status_code == 401
+        # Further attempts are refused, even with the right key, until the window passes
+        assert client.get("/admin/stats", headers={"X-Admin-Key": "guess"}).status_code == 429
+        assert client.get("/admin/stats", headers={"X-Admin-Key": "secret-admin"}).status_code == 429
+
+    def test_keys_compared_in_constant_time(self):
+        from main import _keys_match
+        assert _keys_match("abc", "abc") is True
+        assert _keys_match("abd", "abc") is False
+        assert _keys_match(None, "abc") is False
+        assert _keys_match("", "abc") is False
+
+    def test_proxy_headers_ignored_unless_trusted(self, monkeypatch):
+        from starlette.requests import Request
+        import main
+
+        scope = {"type": "http", "headers": [(b"x-real-ip", b"6.6.6.6")], "client": ("10.0.0.5", 1234)}
+        monkeypatch.setattr("main.TRUST_PROXY_HEADERS", False)
+        assert main._client_ip(Request(scope)) == "10.0.0.5"
+        monkeypatch.setattr("main.TRUST_PROXY_HEADERS", True)
+        assert main._client_ip(Request(scope)) == "6.6.6.6"
+
+    def test_rate_limit_store_drops_idle_ips(self):
+        import main
+        main._rate_limit_store["idle-ip"] = [0.0]  # far in the past
+        main._sliding_window(main._rate_limit_store, "idle-ip", 60.0)
+        assert "idle-ip" not in main._rate_limit_store
+
+    def test_security_headers_present(self, client):
+        r = client.get("/health")
+        assert r.headers["X-Content-Type-Options"] == "nosniff"
+        assert r.headers["X-Frame-Options"] == "DENY"
+        assert r.headers["Referrer-Policy"] == "no-referrer"
+
+    def test_admin_responses_not_cached(self, client, monkeypatch):
+        monkeypatch.setattr("main.ADMIN_KEY", "secret-admin")
+        r = client.get("/admin/stats", headers={"X-Admin-Key": "secret-admin"})
+        assert r.headers["Cache-Control"] == "no-store"
+
+    def test_cors_does_not_allow_credentials(self, client):
+        r = client.options("/jobs", headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        })
+        assert r.headers.get("access-control-allow-credentials") is None
+
+    def test_overlong_address_rejected(self, client):
+        self._reset_rate_limit()
+        csv_data = "address\n" + ("A" * 301) + "\n"
+        r = client.post("/jobs", files={"file": ("a.csv", io.BytesIO(csv_data.encode()), "text/csv")})
+        assert r.status_code == 422
+        assert "too long" in r.json()["detail"]
+
+    def test_overlong_depot_rejected(self, client):
+        self._reset_rate_limit()
+        r = client.post(
+            "/jobs",
+            files={"file": ("a.csv", io.BytesIO(b"address\n1 Main St\n"), "text/csv")},
+            data={"depot_address": "D" * 301},
+        )
+        assert r.status_code == 422
+
+    def test_csv_parse_errors_do_not_leak_internals(self, client):
+        self._reset_rate_limit()
+        r = client.post("/jobs", files={"file": ("a.csv", io.BytesIO(b"\xff\xfe\x00bad"), "text/csv")})
+        assert r.status_code == 422
+        assert r.json()["detail"] == "CSV must be UTF-8 encoded text."
+
+    def test_failed_job_hides_exception_text(self, client, monkeypatch):
+        """Unexpected errors are logged server-side; the job only shows a generic message."""
+        self._reset_rate_limit()
+
+        async def fake_geocode(address, client=None, db_session=None):
+            return (40.75, -73.98)
+
+        async def broken_optimizer(depot, stops):
+            raise RuntimeError("connect to postgres://user:pw@internal-host failed")
+
+        monkeypatch.setattr("main.geocode_address", fake_geocode)
+        monkeypatch.setattr("main._call_optimizer", broken_optimizer)
+        r = client.post("/jobs", files={"file": ("a.csv", io.BytesIO(b"address\n1 Main St\n"), "text/csv")})
+        job = client.get(f"/jobs/{r.json()['job_id']}").json()
+        assert job["status"] == "failed"
+        assert "internal-host" not in (job["error_message"] or "")
+        assert job["error_message"] == "Internal error while processing the job."
+
+    def test_negative_pagination_rejected(self, client, monkeypatch):
+        assert client.get("/jobs?offset=-1").status_code == 422
+        assert client.get("/jobs?limit=0").status_code == 422
+        monkeypatch.setattr("main.ADMIN_KEY", "secret-admin")
+        h = {"X-Admin-Key": "secret-admin"}
+        assert client.get("/admin/jobs?offset=-5", headers=h).status_code == 422
+
+    def test_admin_status_filter_validated(self, client, monkeypatch):
+        monkeypatch.setattr("main.ADMIN_KEY", "secret-admin")
+        h = {"X-Admin-Key": "secret-admin"}
+        assert client.get("/admin/jobs?status=completed", headers=h).status_code == 200
+        assert client.get("/admin/jobs?status=bogus", headers=h).status_code == 422

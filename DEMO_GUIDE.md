@@ -369,7 +369,7 @@ pytest tests/ -v
 
 | Suite | Tests | What they cover |
 |-------|-------|----------------|
-| `test_api.py` | 36 | Auth, validation, rate limiting, CSV edge cases, background tasks, status polling |
+| `test_api.py` | 51 | Auth, security hardening, validation, rate limiting, CSV edge cases, background tasks, status polling |
 | `test_optimizer.py` | 27 | Haversine accuracy, NN + 2-opt correctness, performance budgets |
 | `test_integration.py` | 4 | End-to-end optimizer service calls |
 

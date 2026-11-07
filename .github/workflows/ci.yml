@@ -54,6 +54,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Audit Python dependencies (pip-audit)
+        run: |
+          pip install pip-audit
+          pip-audit -r api/requirements.txt --progress-spinner off
+          pip-audit -r optimizer/requirements.txt --progress-spinner off
+
       - name: Build API image for scanning
         run: docker build -t routeweave-api:scan ./api
 

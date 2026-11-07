@@ -10,12 +10,18 @@ Security features:
   - Input validation via Pydantic models
   - CORS restricted to known origins (configurable via env)
   - Parameterized SQL queries (SQLAlchemy ORM)
-  - Optional API-key authentication on mutation endpoints
+  - Optional API-key authentication on all job/route/analytics endpoints
   - Optional admin-key authentication on management endpoints
+  - Constant-time key comparison + brute-force lockout on failed auth
+  - Security headers on every response, sanitized error messages
+  - Bounded upload reads and per-address length limits
+
+See SECURITY.md for the full checklist.
 """
 
 import asyncio
 import csv
+import hmac
 import io
 import json
 import logging
@@ -36,6 +42,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     Request,
     UploadFile,
     status,
@@ -76,8 +83,16 @@ logger = logging.getLogger("routeweave.api")
 # ---------------------------------------------------------------------------
 
 OPTIMIZER_URL = os.getenv("OPTIMIZER_URL", "http://optimizer:8001")
-API_KEY = os.getenv("API_KEY")
-ADMIN_KEY = os.getenv("ADMIN_KEY")
+API_KEY = os.getenv("API_KEY") or None
+ADMIN_KEY = os.getenv("ADMIN_KEY") or None
+
+# Only trust X-Real-IP / X-Forwarded-For when the API sits behind our own
+# reverse proxy (nginx sets it). Otherwise any client could spoof its IP
+# and dodge rate limiting.
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() in ("1", "true", "yes")
+
+# Interactive API docs (/docs, /redoc). Disable in production.
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "true").lower() in ("1", "true", "yes")
 
 # SECURITY: When API_KEY is enabled, you MUST terminate TLS at a reverse proxy.
 
@@ -98,9 +113,36 @@ else:
 # ---------------------------------------------------------------------------
 
 MAX_REQUESTS_PER_MINUTE = 5
+MAX_AUTH_FAILURES_PER_WINDOW = 10
+AUTH_FAILURE_WINDOW_SECONDS = 300.0
 
 # Track request timestamps per IP
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
+# Track failed API/admin key attempts per IP (brute-force protection)
+_auth_failure_store: dict[str, list[float]] = defaultdict(list)
+
+
+def _client_ip(request: Request) -> str:
+    """Resolve the caller's IP, honouring proxy headers only when trusted."""
+    if TRUST_PROXY_HEADERS:
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _sliding_window(store: dict[str, list[float]], key: str, window: float) -> list[float]:
+    """Drop expired timestamps; delete empty buckets so memory stays bounded."""
+    cutoff = time.time() - window
+    recent = [ts for ts in store.get(key, ()) if ts > cutoff]
+    if recent:
+        store[key] = recent
+    else:
+        store.pop(key, None)
+    return recent
 
 
 def _check_rate_limit(client_ip: str) -> bool:
@@ -108,18 +150,10 @@ def _check_rate_limit(client_ip: str) -> bool:
     Returns True if the request should be ALLOWED, False if rate-limited.
     Implements a sliding-window counter: max 5 requests per 60-second window.
     """
-    now = time.time()
-    window_start = now - 60.0
-
-    # Clean old entries
-    _rate_limit_store[client_ip] = [
-        ts for ts in _rate_limit_store[client_ip] if ts > window_start
-    ]
-
-    if len(_rate_limit_store[client_ip]) >= MAX_REQUESTS_PER_MINUTE:
+    recent = _sliding_window(_rate_limit_store, client_ip, 60.0)
+    if len(recent) >= MAX_REQUESTS_PER_MINUTE:
         return False
-
-    _rate_limit_store[client_ip].append(now)
+    _rate_limit_store[client_ip].append(time.time())
     return True
 
 
@@ -127,35 +161,51 @@ def _check_rate_limit(client_ip: str) -> bool:
 # Authentication
 # ---------------------------------------------------------------------------
 
-async def require_api_key(x_api_key: str = Header(None)) -> None:
+def _keys_match(provided: str | None, expected: str) -> bool:
+    """Constant-time comparison so response timing can't leak the key."""
+    if not provided:
+        return False
+    return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _verify_key(request: Request, provided: str | None, expected: str, label: str) -> None:
+    """Check a key, locking out an IP after repeated failures."""
+    ip = _client_ip(request)
+    failures = _sliding_window(_auth_failure_store, ip, AUTH_FAILURE_WINDOW_SECONDS)
+    if len(failures) >= MAX_AUTH_FAILURES_PER_WINDOW:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed authentication attempts. Try again later.",
+        )
+    if not _keys_match(provided, expected):
+        _auth_failure_store[ip].append(time.time())
+        logger.warning("Rejected %s key from %s", label, ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid or missing {label} key.",
+        )
+
+
+async def require_api_key(request: Request, x_api_key: str = Header(None)) -> None:
     """
     Enforce API-key authentication when API_KEY is configured.
     """
     if not API_KEY:
         return  # auth disabled in dev
-
-    if x_api_key != API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key.",
-        )
+    _verify_key(request, x_api_key, API_KEY, "API")
 
 
-async def require_admin_key(x_admin_key: str = Header(None)) -> None:
+async def require_admin_key(request: Request, x_admin_key: str = Header(None)) -> None:
     """
-    Enforce admin-key authentication when ADMIN_KEY is configured.
+    Enforce admin-key authentication. Admin endpoints are disabled
+    entirely unless ADMIN_KEY is configured.
     """
     if not ADMIN_KEY:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access is disabled. Set ADMIN_KEY to enable.",
         )
-
-    if x_admin_key != ADMIN_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing admin key.",
-        )
+    _verify_key(request, x_admin_key, ADMIN_KEY, "admin")
 
 
 # ---------------------------------------------------------------------------
@@ -305,11 +355,18 @@ async def _process_job(job_id: uuid.UUID) -> None:
         except Exception as e:
             logger.error("Job %s failed: %s", job_id, str(e), exc_info=True)
             try:
+                await session.rollback()
                 result = await session.execute(select(Job).where(Job.id == job_id))
                 job = result.scalar_one_or_none()
                 if job:
                     job.status = "failed"
-                    job.error_message = str(e)
+                    # Raw exception text can expose internal hostnames, SQL or
+                    # stack details; keep it in the server log only.
+                    job.error_message = (
+                        "Route optimization service is unavailable. Please retry."
+                        if isinstance(e, httpx.HTTPError)
+                        else "Internal error while processing the job."
+                    )
                     await session.commit()
             except Exception as inner:
                 logger.error("Failed to mark job %s as failed: %s", job_id, inner)
@@ -338,17 +395,33 @@ app = FastAPI(
     description="Last-mile delivery route optimizer — upload addresses, get optimized routes.",
     version="1.2.0",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url="/redoc" if ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
 )
 
+# Auth uses headers, never cookies, so credentials stay off and only the
+# methods/headers the client actually uses are allowed cross-origin.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key", "X-Admin-Key"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Defense-in-depth headers on every API response."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
+    if request.url.path.startswith("/admin"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +430,8 @@ app.add_middleware(
 
 MAX_STOPS = 50
 MAX_CSV_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB (must match Nginx client_max_body_size)
+MAX_ADDRESS_LENGTH = 300
+JOB_STATUSES = ("pending", "geocoding", "optimizing", "completed", "failed")
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +476,7 @@ async def create_job(
     Poll SSE /jobs/{job_id}/events or GET /jobs/{job_id} for status updates.
     """
     # --- Rate limiting ---
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_ip(request)
     if not _check_rate_limit(client_ip):
         raise HTTPException(
             status_code=429,
@@ -419,12 +494,21 @@ async def create_job(
         )
 
     # --- Parse CSV ---
+    depot_address = depot_address.strip()
+    if len(depot_address) > MAX_ADDRESS_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Depot address is too long (max {MAX_ADDRESS_LENGTH} characters).",
+        )
+
     try:
-        content = await file.read()
+        # Read at most one byte past the limit so an oversized upload is never
+        # pulled fully into memory (matters when the API is hit directly).
+        content = await file.read(MAX_CSV_SIZE_BYTES + 1)
         if len(content) > MAX_CSV_SIZE_BYTES:
             raise HTTPException(
                 status_code=413,
-                detail=f"File too large ({len(content)} bytes). Maximum is {MAX_CSV_SIZE_BYTES // 1024 // 1024} MB.",
+                detail=f"File too large. Maximum is {MAX_CSV_SIZE_BYTES // 1024 // 1024} MB.",
             )
         text = content.decode("utf-8-sig")
         reader = csv.DictReader(io.StringIO(text))
@@ -439,10 +523,20 @@ async def create_job(
 
         addresses = []
         for row in reader:
-            normalized = {k.strip().lower(): v.strip() for k, v in row.items()}
+            normalized = {
+                (k or "").strip().lower(): (v or "").strip() if isinstance(v, str) else ""
+                for k, v in row.items()
+            }
             addr = normalized.get("address", "").strip()
             if addr:
+                if len(addr) > MAX_ADDRESS_LENGTH:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Address on row {reader.line_num} is too long (max {MAX_ADDRESS_LENGTH} characters).",
+                    )
                 addresses.append(addr)
+            if len(addresses) > MAX_STOPS:
+                break
 
         if len(addresses) == 0:
             raise HTTPException(
@@ -453,15 +547,18 @@ async def create_job(
         if len(addresses) > MAX_STOPS:
             raise HTTPException(
                 status_code=422,
-                detail=f"Too many stops ({len(addresses)}). Maximum is {MAX_STOPS}.",
+                detail=f"Too many stops. Maximum is {MAX_STOPS} per job.",
             )
 
     except HTTPException:
         raise
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="CSV must be UTF-8 encoded text.")
     except Exception as e:
+        logger.warning("CSV parse failure: %s", e)
         raise HTTPException(
             status_code=422,
-            detail=f"Failed to parse CSV: {str(e)}",
+            detail="Failed to parse CSV. Check that it is a valid comma-separated file.",
         )
 
     # --- Create job record ---
@@ -497,7 +594,7 @@ async def create_job(
     }
 
 
-@app.get("/jobs/{job_id}/events", tags=["jobs"])
+@app.get("/jobs/{job_id}/events", tags=["jobs"], dependencies=[Depends(require_api_key)])
 async def job_events(
     job_id: str,
     session: AsyncSession = Depends(get_session),
@@ -554,10 +651,10 @@ async def job_events(
     )
 
 
-@app.get("/jobs", response_model=JobListResponse, tags=["jobs"])
+@app.get("/jobs", response_model=JobListResponse, tags=["jobs"], dependencies=[Depends(require_api_key)])
 async def list_jobs(
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0, le=100_000),
     session: AsyncSession = Depends(get_session),
 ):
     """List recent optimization jobs, newest first."""
@@ -568,7 +665,7 @@ async def list_jobs(
         select(Job)
         .options(selectinload(Job.stops))
         .order_by(Job.created_at.desc())
-        .limit(min(limit, 50))
+        .limit(limit)
         .offset(offset)
     )
     jobs = result.scalars().all()
@@ -588,7 +685,7 @@ async def list_jobs(
     )
 
 
-@app.get("/jobs/{job_id}", tags=["jobs"])
+@app.get("/jobs/{job_id}", tags=["jobs"], dependencies=[Depends(require_api_key)])
 async def get_job(
     job_id: str,
     session: AsyncSession = Depends(get_session),
@@ -616,17 +713,19 @@ async def get_job(
     )
 
 
-@app.delete("/jobs/{job_id}", tags=["jobs"], status_code=status.HTTP_204_NO_CONTENT)
+@app.delete(
+    "/jobs/{job_id}",
+    tags=["jobs"],
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_admin_key)],
+)
 async def delete_job(
     job_id: str,
-    x_admin_key: str = Header(None),
     session: AsyncSession = Depends(get_session),
 ):
     """
-    Delete a job and all associated stops/routes.
-    Requires admin key when ADMIN_KEY is configured.
+    Delete a job and all associated stops/routes. Requires the admin key.
     """
-    await require_admin_key(x_admin_key)
 
     try:
         uid = uuid.UUID(job_id)
@@ -644,7 +743,7 @@ async def delete_job(
     return None
 
 
-@app.get("/jobs/{job_id}/route", response_model=RouteResponse, tags=["jobs"])
+@app.get("/jobs/{job_id}/route", response_model=RouteResponse, tags=["jobs"], dependencies=[Depends(require_api_key)])
 async def get_route(
     job_id: str,
     session: AsyncSession = Depends(get_session),
@@ -716,7 +815,7 @@ async def get_route(
     )
 
 
-@app.get("/jobs/{job_id}/route.gpx", tags=["jobs"])
+@app.get("/jobs/{job_id}/route.gpx", tags=["jobs"], dependencies=[Depends(require_api_key)])
 async def export_gpx(
     job_id: str,
     session: AsyncSession = Depends(get_session),
@@ -799,16 +898,14 @@ async def export_gpx(
 # Admin / Analytics Endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/admin/stats", tags=["admin"])
+@app.get("/admin/stats", tags=["admin"], dependencies=[Depends(require_admin_key)])
 async def admin_stats(
-    x_admin_key: str = Header(None),
     session: AsyncSession = Depends(get_session),
 ):
     """
     Admin dashboard statistics. Returns high-level system metrics.
     Requires ADMIN_KEY header.
     """
-    await require_admin_key(x_admin_key)
 
     # Total jobs
     total_jobs = await session.execute(select(func.count()).select_from(Job))
@@ -816,7 +913,7 @@ async def admin_stats(
 
     # Status breakdown
     status_counts = {}
-    for st in ("pending", "geocoding", "optimizing", "completed", "failed"):
+    for st in JOB_STATUSES:
         cnt = await session.execute(select(func.count()).select_from(Job).where(Job.status == st))
         status_counts[st] = cnt.scalar() or 0
 
@@ -868,11 +965,10 @@ async def admin_stats(
     }
 
 
-@app.get("/admin/jobs", tags=["admin"])
+@app.get("/admin/jobs", tags=["admin"], dependencies=[Depends(require_admin_key)])
 async def admin_list_jobs(
-    x_admin_key: str = Header(None),
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=100_000),
     status: str | None = None,
     session: AsyncSession = Depends(get_session),
 ):
@@ -880,13 +976,13 @@ async def admin_list_jobs(
     Admin job listing with filtering. Returns full job details including routes.
     Requires ADMIN_KEY header.
     """
-    await require_admin_key(x_admin_key)
-
     query = select(Job).options(selectinload(Job.stops), selectinload(Job.route))
     if status:
+        if status not in JOB_STATUSES:
+            raise HTTPException(status_code=422, detail="Unknown status filter.")
         query = query.where(Job.status == status)
 
-    query = query.order_by(Job.created_at.desc()).limit(min(limit, 100)).offset(offset)
+    query = query.order_by(Job.created_at.desc()).limit(limit).offset(offset)
     result = await session.execute(query)
     jobs = result.scalars().all()
 
@@ -910,13 +1006,13 @@ async def admin_list_jobs(
     }
 
 
-@app.get("/analytics/overview", tags=["analytics"])
+@app.get("/analytics/overview", tags=["analytics"], dependencies=[Depends(require_api_key)])
 async def analytics_overview(
     session: AsyncSession = Depends(get_session),
 ):
     """
-    Public system-wide analytics. No auth required.
-    Great for portfolio demos and dashboards.
+    System-wide analytics. Public in dev; requires the API key when
+    API_KEY is configured.
     """
     total_jobs = await session.execute(select(func.count()).select_from(Job))
     total = total_jobs.scalar() or 0

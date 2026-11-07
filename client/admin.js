@@ -11,7 +11,21 @@
 
 const API_BASE = window.location.port === '3000' ? '/api' : 'http://localhost:8000';
 
-let adminKey = localStorage.getItem('routeweave_admin_key') || '';
+// The admin key lives in sessionStorage (cleared when the tab closes), not
+// localStorage, to shorten its exposure window. Drop any legacy copy.
+function readAdminKey() {
+    try {
+        localStorage.removeItem('routeweave_admin_key');
+        return sessionStorage.getItem('routeweave_admin_key') || '';
+    } catch (e) { return ''; }
+}
+function storeAdminKey(key) {
+    try {
+        if (key) sessionStorage.setItem('routeweave_admin_key', key);
+        else sessionStorage.removeItem('routeweave_admin_key');
+    } catch (e) { /* storage unavailable */ }
+}
+let adminKey = readAdminKey();
 
 // ─────────────────────────────────────────────────────────────────────────
 // DOM References
@@ -40,9 +54,26 @@ async function verifyAdminKey(key) {
         const resp = await fetch(`${API_BASE}/admin/stats`, {
             headers: { 'X-Admin-Key': key },
         });
-        return resp.status === 200;
+        return resp.status;
     } catch (e) {
-        return false;
+        return 0;
+    }
+}
+
+// Key revoked/rotated while signed in: drop it and return to the login screen
+function signOut(message) {
+    adminKey = '';
+    storeAdminKey('');
+    stopAutoRefreshSafe();
+    dashboard.style.display = 'none';
+    loginScreen.style.display = '';
+    loginError.textContent = message || '';
+}
+
+function stopAutoRefreshSafe() {
+    if (refreshInterval) {
+        clearInterval(refreshInterval);
+        refreshInterval = null;
     }
 }
 
@@ -50,11 +81,18 @@ loginBtn.addEventListener('click', async () => {
     const key = adminKeyInput.value.trim();
     if (!key) return;
     loginError.textContent = '';
-    const ok = await verifyAdminKey(key);
-    if (ok) {
+    const status = await verifyAdminKey(key);
+    if (status === 200) {
         adminKey = key;
-        localStorage.setItem('routeweave_admin_key', key);
+        storeAdminKey(key);
+        adminKeyInput.value = '';
         showDashboard();
+    } else if (status === 429) {
+        loginError.textContent = 'Too many attempts. Wait a few minutes and try again.';
+    } else if (status === 403) {
+        loginError.textContent = 'Admin access is disabled on this server (ADMIN_KEY not set).';
+    } else if (status === 0) {
+        loginError.textContent = 'Could not reach the server.';
     } else {
         loginError.textContent = 'Invalid admin key.';
     }
@@ -81,6 +119,10 @@ async function loadStats() {
         const resp = await fetch(`${API_BASE}/admin/stats`, {
             headers: { 'X-Admin-Key': adminKey },
         });
+        if (resp.status === 401 || resp.status === 403) {
+            signOut('Session expired or admin key changed. Sign in again.');
+            return;
+        }
         if (!resp.ok) return;
         const data = await resp.json();
 
@@ -191,7 +233,7 @@ function renderJobsTable(jobs) {
 async function deleteJob(jobId) {
     if (!confirm(`Delete job ${jobId.slice(0, 8)}…? This cannot be undone.`)) return;
     try {
-        const resp = await fetch(`${API_BASE}/jobs/${jobId}`, {
+        const resp = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}`, {
             method: 'DELETE',
             headers: { 'X-Admin-Key': adminKey },
         });
@@ -232,10 +274,12 @@ function startAutoRefresh() {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────
 
+// Escape for both element content AND quoted attribute values
+// (textContent->innerHTML alone leaves " and ' intact, which allows
+// attribute injection via e.g. title="${...}").
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return String(text ?? '').replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -50,6 +50,30 @@ function setApiKey(key) {
     } catch (e) { /* storage unavailable */ }
 }
 
+/**
+ * fetch() wrapper that attaches the API key (when the server requires one).
+ * With interactive=true, a 401 prompts for the key once and retries.
+ */
+async function apiFetch(path, options = {}, interactive = false) {
+    const send = () => {
+        const headers = Object.assign({}, options.headers);
+        const key = getApiKey();
+        if (key) headers['X-API-Key'] = key;
+        return fetch(`${API_BASE}${path}`, Object.assign({}, options, { headers }));
+    };
+
+    let response = await send();
+    if (response.status === 401 && interactive) {
+        const entered = window.prompt('This server requires an API key. Enter it to continue:');
+        if (entered && entered.trim()) {
+            setApiKey(entered.trim());
+            response = await send();
+        }
+        if (response.status === 401) setApiKey('');
+    }
+    return response;
+}
+
 // ---------------------------------------------------------------------------
 // DOM References
 // ---------------------------------------------------------------------------
@@ -196,22 +220,7 @@ optimizeBtn.addEventListener('click', async () => {
         formData.append('file', selectedFile);
         formData.append('depot_address', depotInput.value.trim());
 
-        const submit = () => {
-            const headers = {};
-            const key = getApiKey();
-            if (key) headers['X-API-Key'] = key;
-            return fetch(`${API_BASE}/jobs`, { method: 'POST', body: formData, headers });
-        };
-
-        let response = await submit();
-
-        if (response.status === 401) {
-            const entered = window.prompt('This server requires an API key. Enter it to continue:');
-            if (entered && entered.trim()) {
-                setApiKey(entered.trim());
-                response = await submit();
-            }
-        }
+        const response = await apiFetch('/jobs', { method: 'POST', body: formData }, true);
 
         if (response.status === 429) {
             setPipeline('failed');
@@ -221,7 +230,6 @@ optimizeBtn.addEventListener('click', async () => {
         }
 
         if (response.status === 401) {
-            setApiKey('');
             setPipeline('failed');
             showStatus('Invalid or missing API key.', 'error');
             resetButton();
@@ -275,7 +283,9 @@ optimizeBtn.addEventListener('click', async () => {
 
 function connectSSE(jobId) {
     try {
-        const evtSource = new EventSource(`${API_BASE}/jobs/${jobId}/events`);
+        const evtSource = new EventSource(`${API_BASE}/jobs/${encodeURIComponent(jobId)}/events`);
+        // EventSource can't send headers: if the server requires an API key this
+        // stream gets a 401, onerror fires, and we fall back to authenticated polling.
         sseConnection = evtSource;
 
         evtSource.onmessage = (event) => {
@@ -369,7 +379,7 @@ async function pollJob(jobId) {
         if (jobFinished || jobId !== activeJobId) return;
 
         try {
-            const response = await fetch(`${API_BASE}/jobs/${jobId}`);
+            const response = await apiFetch(`/jobs/${encodeURIComponent(jobId)}`);
             if (response.status === 404) {
                 handleJobStatus('not_found', jobId);
                 return;
@@ -400,7 +410,7 @@ async function pollJob(jobId) {
 
 async function loadRoute(jobId) {
     try {
-        const response = await fetch(`${API_BASE}/jobs/${jobId}/route`);
+        const response = await apiFetch(`/jobs/${encodeURIComponent(jobId)}/route`, {}, true);
         if (!response.ok) {
             const err = await response.json();
             showStatus(`Error loading route: ${err.detail}`, 'error');
@@ -476,14 +486,27 @@ function showResults(data) {
     });
 }
 
-function downloadGPX(jobId) {
-    const url = `${API_BASE}/jobs/${jobId}/route.gpx`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `routeweave_${jobId}.gpx`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+async function downloadGPX(jobId) {
+    // Fetch (rather than a plain link) so the API key header is sent.
+    try {
+        const response = await apiFetch(`/jobs/${encodeURIComponent(jobId)}/route.gpx`, {}, true);
+        if (!response.ok) {
+            showStatus('Could not download the GPX file.', 'error');
+            return;
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `routeweave_${jobId}.gpx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+        console.error('GPX download error:', err);
+        showStatus('Could not download the GPX file.', 'error');
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -694,7 +717,7 @@ function animateRoute(coords) {
 
 async function refreshHistory() {
     try {
-        const response = await fetch(`${API_BASE}/jobs?limit=10`);
+        const response = await apiFetch('/jobs?limit=10');
         if (!response.ok) return;
 
         const data = await response.json();
@@ -774,10 +797,12 @@ function resetButton() {
     btnText.textContent = 'Optimize Route';
 }
 
+// Escape for both element content AND quoted attribute values
+// (textContent->innerHTML alone leaves " and ' intact, which allows
+// attribute injection via e.g. title="${...}").
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    return String(text ?? '').replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
 }
 
 function formatFileSize(bytes) {

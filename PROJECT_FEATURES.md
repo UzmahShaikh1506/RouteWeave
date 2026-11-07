@@ -154,7 +154,7 @@ Browser (localhost:3000)
 | **GitHub Actions CI/CD** | 4-stage pipeline: tests → Trivy security scan → GHCR build/push → deploy hook. |
 | **Trivy Scanning** | Blocks on CRITICAL vulnerabilities in container images. |
 | **Environment Config** | `.env.example` with DB_PASSWORD, API_KEY, ADMIN_KEY, CORS_ORIGINS. |
-| **Test Suite** | 67 tests: API, auth, rate limiting, CSV parsing, SSE, admin, analytics, GPX, optimizer math, integration, full geocode→optimize→route pipeline. Fully offline (geocoder stubbed). |
+| **Test Suite** | 82 tests: API, auth, security hardening (see SECURITY.md), rate limiting, CSV parsing, SSE, admin, analytics, GPX, optimizer math, integration, full geocode→optimize→route pipeline. Fully offline (geocoder stubbed). |
 | **Pytest** | SQLite backend for fast unit tests. No Docker required for testing. |
 
 ---
