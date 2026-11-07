@@ -959,4 +959,4 @@ code {
 .file-name .file-size { color: var(--muted); font-weight: 500; font-size: 0.75rem; }
 
 /* Muted basemap so route lines and stop markers carry the colour */
-.leaflet-tile-pane { filter: saturate(0.3) contrast(0.92) brightness(1.05); }
+.leaflet-tile-pane { filter: grayscale(0.85) contrast(0.85) brightness(1.06); }
